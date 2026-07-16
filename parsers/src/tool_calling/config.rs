@@ -339,6 +339,16 @@ impl Default for MiniMaxM3ParserConfig {
     }
 }
 
+/// Inkling tool-call config; markers are fixed model tokens, so this holds only the
+/// shared EOF-recovery toggle. Grammar: [`crate::tool_calling::inkling`].
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct InklingParserConfig {
+    /// See [`JsonParserConfig::allow_eof_recovery`]. Streaming jails MUST
+    /// leave this `false`.
+    #[serde(default)]
+    pub allow_eof_recovery: bool,
+}
+
 /// Parser-specific configuration
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -356,6 +366,9 @@ pub enum ParserConfig {
     /// delimiters, and fixed `<|tool_call>...<tool_call|>` markers. No
     /// configuration is required at runtime — markers are not user-tunable.
     Gemma4,
+    /// Inkling uses `<|message_model|>NAME<|content_invoke_tool_json|>{...}<|end_message|>`
+    /// framing around a `{"name":..., "args":{...}}` JSON object.
+    Inkling(InklingParserConfig),
 }
 
 impl ParserConfig {
@@ -395,6 +408,9 @@ impl ParserConfig {
             ParserConfig::Gemma4 => {
                 vec![crate::tool_calling::gemma4::TOOL_CALL_START.to_string()]
             }
+            ParserConfig::Inkling(_) => {
+                vec![crate::tool_calling::inkling::INVOKE.to_string()]
+            }
         }
     }
 
@@ -417,6 +433,9 @@ impl ParserConfig {
                 )]
             }
             ParserConfig::Gemma4 => vec![crate::tool_calling::gemma4::TOOL_CALL_END.to_string()],
+            ParserConfig::Inkling(_) => {
+                vec![crate::tool_calling::inkling::END_MESSAGE.to_string()]
+            }
         }
     }
 }
@@ -778,6 +797,15 @@ impl ToolCallConfig {
     pub fn gemma4() -> Self {
         Self {
             parser_config: ParserConfig::Gemma4,
+            structural_tag_builder: None,
+        }
+    }
+
+    /// Inkling tool calls: `args` (not `arguments`) plus a redundant `<|message_model|>`
+    /// header rule out the generic JSON parser. Grammar: [`crate::tool_calling::inkling`].
+    pub fn inkling() -> Self {
+        Self {
+            parser_config: ParserConfig::Inkling(InklingParserConfig::default()),
             structural_tag_builder: None,
         }
     }

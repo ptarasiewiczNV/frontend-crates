@@ -1,0 +1,87 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+family: inkling
+model_label: Inkling NVFP4
+mode: batch
+spec: https://huggingface.co/thinkingmachines/Inkling-NVFP4
+captured_with:
+  dynamo_rust: Dynamo inkling reasoning parser (this crate)
+  sglang_python: sglang inkling ReasoningParser (lmsysorg/sglang:inkling-cu13), captured 2026-07-16
+refs:
+  local: &local_ref 'Inkling block-structured reasoning grammar (<|content_thinking|> / <|content_text|> segments)'
+cases:
+  REASONING.batch.1.a:
+    description: Empty input
+    ref: *local_ref
+    model_text: ''
+    expected:
+      dynamo: &d_1a
+        reasoning_text: ''
+        normal_text: ''
+      vllm: &vllm_unavailable
+        unavailable: vLLM is not installed in the sglang-inkling image; no Inkling reasoning parser to capture.
+      sglang: *d_1a
+  REASONING.batch.1.b:
+    description: Plain text without reasoning markers
+    ref: *local_ref
+    model_text: plain answer
+    expected:
+      dynamo: &d_1b
+        reasoning_text: ''
+        normal_text: plain answer
+      vllm: *vllm_unavailable
+      sglang: *d_1b
+  REASONING.batch.2.a:
+    description: Reasoning block followed by a content answer block
+    ref: *local_ref
+    model_text: '<|message_model|><|content_thinking|>The user asks a simple arithmetic question. 2+2=4.<|end_message|><|message_model|><|content_text|>2 + 2 = 4.<|end_message|><|content_model_end_sampling|>'
+    expected:
+      dynamo: &d_2a
+        reasoning_text: The user asks a simple arithmetic question. 2+2=4.
+        normal_text: 2 + 2 = 4.
+      vllm: *vllm_unavailable
+      sglang: *d_2a
+  REASONING.batch.2.b:
+    description: Reasoning block only (no content block)
+    ref: *local_ref
+    model_text: '<|message_model|><|content_thinking|>thinking<|end_message|>'
+    expected:
+      dynamo: &d_2b
+        reasoning_text: thinking
+        normal_text: ''
+      vllm: *vllm_unavailable
+      sglang: *d_2b
+  REASONING.batch.2.c:
+    description: Content block only (no reasoning block)
+    ref: *local_ref
+    model_text: '<|message_model|><|content_text|>2 + 2 = 4.<|end_message|>'
+    expected:
+      dynamo: &d_2c
+        reasoning_text: ''
+        normal_text: 2 + 2 = 4.
+      vllm: *vllm_unavailable
+      sglang: *d_2c
+  REASONING.batch.3.a:
+    description: Reasoning followed by a tool-call block preserved verbatim for the downstream tool parser
+    ref: *local_ref
+    model_text: '<|message_model|><|content_thinking|>I should call the weather tool for Paris.<|end_message|><|message_model|>get_weather<|content_invoke_tool_json|>{"name":"get_weather","args":{"location":"Paris","unit":"celsius"}}<|end_message|><|content_model_end_sampling|>'
+    expected:
+      dynamo:
+        reasoning_text: I should call the weather tool for Paris.
+        normal_text: '<|message_model|>get_weather<|content_invoke_tool_json|>{"name":"get_weather","args":{"location":"Paris","unit":"celsius"}}<|end_message|>'
+        reason: The reasoning parser runs before the tool parser, so the tool-call block passes through verbatim into normal_text; only the trailing terminator is stripped.
+      vllm: *vllm_unavailable
+      sglang:
+        reasoning_text: I should call the weather tool for Paris.
+        normal_text: '<|message_model|>get_weather<|content_invoke_tool_json|>{"name":"get_weather","args":{"location":"Paris","unit":"celsius"}}<|end_message|>'
+  REASONING.batch.5:
+    description: Missing end marker keeps the remaining reasoning text as reasoning
+    ref: *local_ref
+    model_text: '<|message_model|><|content_thinking|>partial reasoning'
+    expected:
+      dynamo: &d_5
+        reasoning_text: partial reasoning
+        normal_text: ''
+      vllm: *vllm_unavailable
+      sglang: *d_5

@@ -1,0 +1,209 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+family: inkling
+model_label: Inkling NVFP4
+mode: batch
+spec: https://huggingface.co/thinkingmachines/Inkling-NVFP4
+captured_with:
+  dynamo_rust: Dynamo inkling parser (this crate)
+  sglang_python: sglang inkling FunctionCallParser (lmsysorg/sglang:inkling-cu13), captured 2026-07-16
+refs:
+  local: &local_ref 'Inkling chat_template.jinja tool-call markup (<|content_invoke_tool_json|> ... <|end_message|>)'
+cases:
+  TOOLCALLING.batch.1:
+    description: Single tool call (happy path)
+    ref: *local_ref
+    model_text: '<|message_model|>get_weather<|content_invoke_tool_json|>{"name":"get_weather","args":{"location":"Paris","unit":"celsius"}}<|end_message|>'
+    tools:
+    - &weather_tool
+      name: get_weather
+      parameters:
+        type: object
+        properties:
+          location:
+            type: string
+          unit:
+            type: string
+    expected:
+      dynamo: &d_1
+        calls:
+        - name: get_weather
+          arguments:
+            location: Paris
+            unit: celsius
+        normal_text: ''
+      vllm: &vllm_unavailable
+        unavailable: vLLM is not installed in the sglang-inkling image; no Inkling tool parser to capture.
+      sglang: *d_1
+  TOOLCALLING.batch.1.a:
+    description: Minimal single call
+    ref: *local_ref
+    model_text: '<|message_model|>weather<|content_invoke_tool_json|>{"name":"weather","args":{"city":"SF"}}<|end_message|>'
+    tools:
+    - *weather_tool
+    expected:
+      dynamo: &d_1a
+        calls:
+        - name: weather
+          arguments:
+            city: SF
+        normal_text: ''
+      vllm: *vllm_unavailable
+      sglang: *d_1a
+  TOOLCALLING.batch.2:
+    description: Headerless legacy call (no <|message_model|> header) still parses
+    ref: *local_ref
+    model_text: '<|content_invoke_tool_json|>{"name":"weather","args":{"city":"SF"}}<|end_message|>'
+    tools:
+    - *weather_tool
+    expected:
+      dynamo: &d_2
+        calls:
+        - name: weather
+          arguments:
+            city: SF
+        normal_text: ''
+      vllm: *vllm_unavailable
+      sglang: *d_2
+  TOOLCALLING.batch.3:
+    description: No tool call (plain text)
+    ref: *local_ref
+    model_text: Hello, how can I help you today?
+    tools:
+    - *weather_tool
+    expected:
+      dynamo: &d_3
+        calls: []
+        normal_text: Hello, how can I help you today?
+      vllm: *vllm_unavailable
+      sglang: *d_3
+  TOOLCALLING.batch.4:
+    description: Two calls back-to-back with trailing terminator
+    ref: *local_ref
+    model_text: '<|message_model|>get_weather<|content_invoke_tool_json|>{"name":"get_weather","args":{"location":"Paris"}}<|end_message|><|message_model|>get_weather<|content_invoke_tool_json|>{"name":"get_weather","args":{"location":"London"}}<|end_message|><|content_model_end_sampling|>'
+    tools:
+    - *weather_tool
+    expected:
+      dynamo: &d_4
+        calls:
+        - name: get_weather
+          arguments:
+            location: Paris
+        - name: get_weather
+          arguments:
+            location: London
+        normal_text: ''
+      vllm: *vllm_unavailable
+      sglang: *d_4
+  TOOLCALLING.batch.5:
+    description: Prefix prose before the tool-call block is kept as normal_text, header stripped
+    ref: *local_ref
+    model_text: 'Let me check that for you. <|message_model|>get_weather<|content_invoke_tool_json|>{"name":"get_weather","args":{"location":"NYC"}}<|end_message|>'
+    tools:
+    - *weather_tool
+    expected:
+      dynamo:
+        calls:
+        - name: get_weather
+          arguments:
+            location: NYC
+        normal_text: 'Let me check that for you.'
+      vllm: *vllm_unavailable
+      sglang:
+        calls:
+        - name: get_weather
+          arguments:
+            location: NYC
+        normal_text: 'Let me check that for you. '
+        reason: 'sglang preserves the prefix trailing space; dynamo trim_end()s the prefix. Cosmetic whitespace divergence.'
+  TOOLCALLING.batch.5.c:
+    description: Truncation mid-argument value is dropped (ambiguous, never guessed)
+    ref: *local_ref
+    model_text: '<|content_invoke_tool_json|>{"name":"weather","args":{"city":"S'
+    tools:
+    - *weather_tool
+    expected:
+      dynamo:
+        calls: []
+        normal_text: ''
+      vllm: *vllm_unavailable
+      sglang:
+        calls: []
+        normal_text: '<|content_invoke_tool_json|>{"name":"weather","args":{"city":"S'
+        reason: 'sglang leaks the truncated tool markup into normal_text; dynamo drops it (goal 3: never leak tool-call markup). Dynamo behavior is preferred here.'
+  TOOLCALLING.batch.9.a:
+    description: Empty model text
+    ref: *local_ref
+    model_text: ''
+    tools:
+    - *weather_tool
+    expected:
+      dynamo: &d_9a
+        calls: []
+        normal_text: ''
+      vllm: *vllm_unavailable
+      sglang: *d_9a
+  TOOLCALLING.batch.9.b:
+    description: Blank / whitespace-only model text
+    ref: *local_ref
+    model_text: '   '
+    tools:
+    - *weather_tool
+    expected:
+      dynamo: &d_9b
+        calls: []
+        normal_text: '   '
+      vllm: *vllm_unavailable
+      sglang: *d_9b
+  TOOLCALLING.batch.10:
+    description: Duplicate calls (same name twice)
+    ref: *local_ref
+    model_text: '<|message_model|>get_weather<|content_invoke_tool_json|>{"name":"get_weather","args":{"location":"NYC"}}<|end_message|><|message_model|>get_weather<|content_invoke_tool_json|>{"name":"get_weather","args":{"location":"LA"}}<|end_message|>'
+    tools:
+    - *weather_tool
+    expected:
+      dynamo: &d_10
+        calls:
+        - name: get_weather
+          arguments:
+            location: NYC
+        - name: get_weather
+          arguments:
+            location: LA
+        normal_text: ''
+      vllm: *vllm_unavailable
+      sglang: *d_10
+  TOOLCALLING.batch.13:
+    description: Unknown tool name absent from supplied tools is still surfaced
+    ref: *local_ref
+    model_text: '<|message_model|>unknown_tool<|content_invoke_tool_json|>{"name":"unknown_tool","args":{"location":"NYC"}}<|end_message|>'
+    tools:
+    - *weather_tool
+    expected:
+      dynamo: &d_13
+        calls:
+        - name: unknown_tool
+          arguments:
+            location: NYC
+        normal_text: ''
+      vllm: *vllm_unavailable
+      sglang: *d_13
+  TOOLCALLING.batch.13.c:
+    description: Mixed known and unknown calls
+    ref: *local_ref
+    model_text: '<|message_model|>get_weather<|content_invoke_tool_json|>{"name":"get_weather","args":{"location":"NYC"}}<|end_message|><|message_model|>unknown_tool<|content_invoke_tool_json|>{"name":"unknown_tool","args":{"location":"LA"}}<|end_message|>'
+    tools:
+    - *weather_tool
+    expected:
+      dynamo: &d_13c
+        calls:
+        - name: get_weather
+          arguments:
+            location: NYC
+        - name: unknown_tool
+          arguments:
+            location: LA
+        normal_text: ''
+      vllm: *vllm_unavailable
+      sglang: *d_13c
