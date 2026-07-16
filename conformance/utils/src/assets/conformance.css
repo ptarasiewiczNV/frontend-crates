@@ -17,25 +17,31 @@ th.case-sub.case-band-1, td.cell.case-band-1 { background: #ffffff; }
    fragment gets a distinct color (cycled) so a merged multi-delta chunk shows its
    boundaries, without a ×N count. Render only inside the dark tooltip; all are
    bright accents, none the default text gray, so every merged piece stands out. */
-.frag0 { color: #7dd3fc; }  /* sky */
-.frag1 { color: #fbbf24; }  /* amber */
-.frag2 { color: #86efac; }  /* green */
-.frag3 { color: #f0abfc; }  /* pink */
+/* args fragment values stay WHITE (same convention as name='...': colored
+   label+quotes, plain value). Chunk boundaries survive as a whisper-subtle
+   alternating dotted underline instead of the old 4-color rotation. */
+.frag0, .frag1, .frag2, .frag3 { color: inherit; }
+.frag1, .frag3 { border-bottom: 1px dotted #475569; }
 th a { color: inherit; text-decoration: none; }
 th a:hover { background: #ffd; }
 td.model, td.parser { white-space: nowrap; }
 td.parser a { color: inherit; text-decoration: none; }
 td.parser a:hover { background: #ffd; }
-td.cell { text-align: center; width: 64px; min-width: 64px; max-width: 64px; font-weight: 400; }
+td.cell { text-align: center; width: 44px; min-width: 44px; max-width: 44px; font-weight: 400; }
+/* One color = one meaning, whether or not the cell has compare data. A cell without
+   `data-cmp` (an n/a stub or a missing fixture) must read exactly like a compare cell
+   of the same meaning: gray = n/a, light-gray = Base-only, near-white = missing. The
+   static status classes below carry the SAME backgrounds as the cmp-* classes; cmp-*
+   keeps `!important` so it still wins for cells that DO have a comparison. */
 td.cell.ok         { color: #0a7d2c; }
-td.cell.donly      { color: #8b949e; }
+td.cell.donly      { color: #8b949e; background: #dfe3e7; }
 td.cell.documented { color: #555; }
 td.cell.research   { color: #b00; }
 td.cell.leak       { color: #b00; }
 td.cell.err        { color: #b00; }
-td.cell.na         { color: #aeb6bf; }
+td.cell.na         { color: #aeb6bf; background: #d3d8de; }
 td.cell.todo       { color: #e07000; }
-td.cell.missing    { color: #8a6d3b; }
+td.cell.missing    { color: #8a6d3b; background: #eceff2; }
 td.cell a { color: inherit; text-decoration: none; display: block; }
 td.cell a:hover { background: #ffd; }
 tr.section td { background: #eef; font-weight: bold; text-align: left; }
@@ -57,6 +63,105 @@ tr.section td { background: #eef; font-weight: bold; text-align: left; }
 .toolbar-desc a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
 .radio-group { display: flex; align-items: center; gap: 8px; border: 1px solid #d0d7de; background: #f8fafc; border-radius: 6px; padding: 6px 8px; }
 .radio-group-label { font-size: 13px; font-weight: 600; }
+/* Compare model (all tabs): per-panel drag buckets — A=Base reference (0 or 1),
+ * B=Compare with, C=Others. Each cell shows how many selected candidates differ
+ * from Base ("=" if none); color encodes leak only (red) vs clean (green). */
+/* Detailed + Reset live at the right end of the tab row. */
+.tabs-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.cmp-reset { border: 1px solid #d0d7de; background: #fff; border-radius: 6px;
+  padding: 6px 10px; font-size: 13px; cursor: pointer; color: #333; }
+.cmp-reset:hover { background: #f1f3f5; }
+/* Parser picker: ONE visible box; inside, one invisible column per engine
+ * (Dynamo / vLLM / SGLang) of equal width, separated by a divider line. Engine
+ * names are omitted (the parser labels are self-explanatory). Each parser row is a
+ * Reference star (acts as a radio, one across all columns) + a Compare checkbox
+ * (any number) + the label; the ref/cmp header labels sit directly over the two
+ * control columns. */
+.cmpctl { display: inline-flex; align-items: stretch; margin: 16px 0 10px; max-width: 100%;
+  border: 1px solid #d0d7de; background: #f8fafc; border-radius: 6px; padding: 5px 0; }
+/* Each engine column shrink-wraps to its longest label — no full-width stretch and
+ * no dead space trailing the checkbox+label rows. */
+.cmpcol { flex: 0 0 auto; min-width: 0; padding: 0 12px; }
+.cmpcol + .cmpcol { border-left: 1px solid #dde3ea; }
+/* header + data rows share the same grid so ref/cmp headers align over the star
+ * and checkbox columns. */
+.cmprow { display: grid; grid-template-columns: 26px 26px 1fr; align-items: center;
+  padding: 1px 0; border-radius: 4px; }
+.cmprow.cmphd { padding-bottom: 3px; margin-bottom: 3px; border-bottom: 1px solid #e3e8ee; }
+.cmphd-ref, .cmphd-cmp { font-size: 9px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.03em; color: #8a95a3; text-align: center; }
+/* "COMPARE WITH" is too wide for the 26px checkbox column, so let the header span
+   into the (empty) label column and left-align it over the checkboxes. */
+.cmphd-cmp { grid-column: 2 / 4; text-align: left; white-space: nowrap; padding-left: 3px; }
+.cmprow-ref, .cmprow-cmp { position: relative; display: flex; justify-content: center;
+  align-items: center; margin: 0; cursor: pointer; }
+.cmprow input.cmp-on { margin: 0; cursor: pointer; }
+/* Reference control: a star that behaves as the radio. The native radio stays for
+ * semantics/a11y but is transparent and overlaid, so the label click toggles it;
+ * the star fills gold when its radio is checked. */
+.cmprow-ref input.cmp-ref { position: absolute; inset: 0; width: 100%; height: 100%;
+  margin: 0; opacity: 0; cursor: pointer; }
+.cmprow-ref .star { font-size: 15px; line-height: 1; color: #cbd2da; pointer-events: none; }
+.cmprow-ref input.cmp-ref:checked ~ .star { color: #f5a623; }
+.cmprow-ref input.cmp-ref:focus-visible ~ .star { outline: 2px solid #6b9bd6; outline-offset: 1px; border-radius: 2px; }
+.cmprow-label { font-size: 12px; color: #2d3440; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; padding-left: 4px; }
+.cmprow.is-ref { background: #eef4fc; }
+.cmprow.is-ref .cmprow-label { font-weight: 700; color: #174a86; }
+/* Mode word coding in candidate labels: (batch) maroon, (stream) NVIDIA green. */
+.cmprow-label .cand-batch { color: #800000; }
+.cmprow-label .cand-stream { color: #15803d; }
+/* The Reference's Compare box is checked + locked (can't be unchecked) — keep it
+ * clearly visible (pressed), just slightly muted to read as locked. */
+.cmprow input.cmp-on:disabled { opacity: 0.55; }
+/* Overview (non-Detailed) cells show only leak color, which depends solely on the
+ * Reference — the Compare-with count is a Details-only marker. So hide the CMP
+ * column entirely in Overview and keep just the Reference picker (REF), collapsing
+ * the row to two tracks. Compare selections are preserved and reappear in Details. */
+body.view-overview .cmpctl .cmphd-cmp,
+body.view-overview .cmpctl .cmprow-cmp { display: none; }
+body.view-overview .cmpctl .cmprow { grid-template-columns: 26px 1fr; }
+/* Cells: compare coloring wins over the dormant parser-status rules (!important).
+ * Numbers are not bold. */
+.cmp-marker { position: absolute; inset: 0; display: none; align-items: center;
+  justify-content: center; color: #111; pointer-events: none; font-weight: 400; }
+td.cell[data-cmp] .cell-marker { display: none !important; }
+body.view-details td.cell .cmp-marker { display: flex; }
+td.cell.cmp-eq { background: #76b884 !important; }
+body.view-overview td.cell.cmp-eq { color: #76b884; }
+td.cell.cmp-leak { background: #db7777 !important; }
+body.view-overview td.cell.cmp-leak { color: #db7777; }
+td.cell.cmp-na { background: #d3d8de !important; }
+body.view-overview td.cell.cmp-na { color: #d3d8de; }
+td.cell.cmp-nobase { background: #eceff2 !important; }
+body.view-overview td.cell.cmp-nobase { color: #eceff2; }
+/* Base-only "·" (no peer to compare): neutral gray, not green. */
+td.cell.cmp-donly { background: #dfe3e7 !important; }
+body.view-overview td.cell.cmp-donly { color: #dfe3e7; }
+/* No-comparison markers (n/a, —, ·) recede to a subtle gray in the detailed view so
+   the real data markers (=, divergence counts) stay high-contrast. */
+body.view-details td.cell.cmp-na .cmp-marker,
+body.view-details td.cell.cmp-nobase .cmp-marker,
+body.view-details td.cell.cmp-donly .cmp-marker { color: #9aa1a9; }
+/* Tooltip candidate sections: hidden until the selection shows them. */
+.ttip .cand { display: none; }
+.ttip .cand.cand-on { display: block; }
+/* JS-inserted reference-aware "not implemented" note (the selected Reference parser
+ * doesn't support this family) — distinct from a case-level "not applicable". */
+.cmp-why { font-weight: 600; color: #8a4b0b; background: #fdf2e2; border: 1px solid #f0d9b5;
+  border-radius: 4px; padding: 4px 6px; margin-bottom: 6px; font-size: 12px; line-height: 1.35;
+  white-space: normal; }
+/* The Reference section (and the per-chunk Reference column) is flagged with a
+ * gold ★ (matching the compare-bar Reference star) before the name and `← REF` after. */
+.ttip .cand.cand-base .ttip-section::before { content: '★ '; color: #f5a623; font-weight: 700; }
+.ttip .cand.cand-base .ttip-section::after { content: ' ← REF'; font-weight: 700; }
+.ttip .ttip-ref { font-weight: 700; white-space: nowrap; }
+.ttip .ttip-ref-star { color: #f5a623; font-weight: 700; }
+/* Per-chunk grid column hidden when it isn't in the Reference/Compare-with set. */
+.ttip .ttip-chunks .col-hidden { display: none; }
+/* The Reference candidate column: gold ★ before + `← REF` after its header label. */
+.ttip .ttip-chunks th.col-ref::before { content: '★ '; color: #f5a623; font-weight: 700; }
+.ttip .ttip-chunks th.col-ref::after { content: ' ← REF'; font-weight: 700; white-space: nowrap; }
 .radio-option { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; cursor: pointer; }
 /* The parser-radio JS hides options the active tab doesn't support via `hidden`;
    the explicit display above would otherwise override the default [hidden] rule
@@ -65,11 +170,12 @@ tr.section td { background: #eef; font-weight: bold; text-align: left; }
 .radio-option input { margin: 0; }
 .checkbox-option { display: inline-flex; align-items: center; gap: 5px; border: 1px solid #d0d7de; background: #f8fafc; border-radius: 6px; padding: 6px 8px; font-size: 13px; cursor: pointer; }
 .checkbox-option input { margin: 0; }
+/* Detailed toggle is a subtle, boxless, grayed-out control (not a prominent button). */
+.checkbox-option.cmp-detailed { border: none; background: none; padding: 4px 2px; color: #8a8f98; }
+.checkbox-option.cmp-detailed input { accent-color: #8a8f98; }
 .view-overview .parity-option { display: none; }
 .view-overview .details-only { display: none; }
 .view-details .summary-only { display: none; }
-.parity-explainer { display: none; }
-.view-details.parity-mode .parity-explainer { display: block; }
 .summary-key { display: inline-block; width: 12px; height: 12px; border: 1px solid rgba(0,0,0,0.22); margin: 0 4px 0 10px; vertical-align: -2px; }
 .summary-key:first-of-type { margin-left: 0; }
 .summary-key.ok { background: #76b884; }
@@ -96,19 +202,25 @@ tr.section td { background: #eef; font-weight: bold; text-align: left; }
 .view-details td.cell .cell-marker sub { font-size: 0.65em; line-height: 0; vertical-align: -0.35em; }
 .view-details td.cell.donly::before { color: #8b949e; }
 .view-details td.cell.donly .cell-marker { color: #8b949e; }
+/* Cells without a comparison (n/a stubs, missing fixtures) show their marker in the
+   same subtle gray as the compare markers (#9aa1a9), so `n/a` and `—` read identically
+   whether or not the cell carries compare data. Scoped to :not([data-cmp]) so compare
+   cells keep rendering their marker via .cmp-marker (no double text). */
+.view-details td.cell.na:not([data-cmp]) > a,
+.view-details td.cell.missing:not([data-cmp]) { color: #9aa1a9; }
 /* The .view-details.parity-mode hide-marker rule is emitted by _impl_status_css()
    (generate_conformance_table.py), not here: it must be ordered right after the
    per-engine status-marker show rules to win the specificity tie. See audit B7. */
 .view-details td.cell a { color: transparent; }
 .view-details td.cell a:hover { background: rgba(255,255,255,0.35); }
 .view-details td.cell .ttip { font-weight: 400; }
-.tabs { display: flex; gap: 4px; border-bottom: 1px solid #ccc; margin: 1em 0; }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid #ccc; margin: 1em 0; align-items: center; flex-wrap: wrap; }
 .tab-button { appearance: none; border: 1px solid #ccc; border-bottom: 0; background: #f5f5f5; color: #222; padding: 6px 10px; font: inherit; cursor: pointer; border-radius: 4px 4px 0 0; }
 .tab-button.active { background: #fff; font-weight: 600; position: relative; top: 1px; }
 /* Smaller-font parenthetical in tab labels, with "batch"/"stream" color-coded so the
    data axis and parser axis read at a glance. */
 .tab-button .tab-sub { font-size: 0.82em; font-weight: 400; }
-.tab-button .w-batch { color: #7c3aed; }
+.tab-button .w-batch { color: #800000; }
 .tab-button .w-stream { color: #15803d; }
 .tab-panel { display: none; }
 .tab-panel.active { display: block; }
@@ -179,6 +291,7 @@ td.cell .ttip a, td.parser .ttip a { color: #bfdbfe; text-decoration: none; bord
 td.cell .ttip a:hover, td.parser .ttip a:hover { color: #dbeafe; background: transparent; }
 .ttip-head { font-weight: bold; margin-bottom: 4px; color: #fbbf24; }
 .ttip-section { font-weight: bold; margin-top: 6px; color: #93c5fd; }
+.ttip-leak { color: #ff6b6b; font-weight: 700; }
 .ttip-pre { margin: 2px 0 0 0; white-space: pre-wrap; word-break: break-word; font-family: inherit; color: #e5e7eb; }
 /* Per-chunk emit chart: input | Dynamo Rust | vLLM Rust | vLLM Python | SGLang, one row per chunk. */
 .ttip-chunks { border-collapse: collapse; margin: 3px 0 0 0; font-size: 11px; width: 100%; }
@@ -215,3 +328,103 @@ td.cell .ttip a:hover, td.parser .ttip a:hover { color: #dbeafe; background: tra
 .tt-h-call { color: #fb923c; }
 .tt-h-stop { color: #f87171; }
 .tt-h-other { color: #22d3ee; }
+
+/* ---- Transpose view (DIS-2280) ----
+   A client-side transposed mirror of the conformance table: models become
+   columns (names rotated CCW 90°, bottom-up, to save horizontal space) and
+   test cases become rows. The transposed <table> is built in JS by cloning the
+   server-rendered cells, so every data cell keeps its data-cmp payload and the
+   compare engine (applyCtl) recolors it for free — the mirror lives in the same
+   panel, so applyCtl's cell query already covers it. */
+.transpose-table { display: none; }
+body.transpose-mode .tab-panel.active table[data-parity-table]:not([data-transpose-table]) { display: none; }
+body.transpose-mode .tab-panel.active .transpose-table { display: table; }
+/* Bottom-up vertical model headers (rotated CCW). Keep the container horizontal
+   and rotate each line independently; otherwise the model and family spans share
+   one vertical writing-mode box and the shorter line cannot bottom-align itself. */
+.transpose-table th.tcol-model {
+  background: #f5f5f5;
+  text-align: center;
+  padding: 6px 2px 0.5em;
+  vertical-align: bottom;
+  font-family: -apple-system, system-ui, sans-serif;
+  font-size: 12px;
+  position: relative;
+}
+.transpose-table th.tcol-model:hover,
+.transpose-table th.tcol-model:focus-within { z-index: 2000; }
+.transpose-table .tcol-model-inner { display: inline-block; vertical-align: bottom; }
+.transpose-table th.tcol-model .tcol-model-label {
+  display: inline-flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 0;
+  vertical-align: bottom;
+}
+.transpose-table .tcol-model-line,
+.transpose-table .tcol-model-name,
+.transpose-table .tcol-model-family {
+  writing-mode: sideways-lr;
+  white-space: nowrap;
+  display: inline-block;
+  line-height: 1;
+}
+.transpose-table .tcol-model-name { font-weight: 600; }
+/* No forced color: the cloned parser markup keeps its own styling (the parser-
+   source link stays clickable, the parser-base text stays muted). */
+.transpose-table .tcol-model-family { font-size: 11px; font-family: ui-monospace, monospace; }
+.transpose-table .tcol-model-family a { color: inherit; text-decoration: none; }
+.transpose-table .tcol-model-family a:hover { text-decoration: underline; }
+/* Width is view-dependent: Overview shows only a color block, so narrow the model
+   columns hard; Details shows the compare marker text, so let each column
+   shrink-wrap to its content (make the marker in-flow, click-anchor out of flow). */
+body.view-overview .transpose-table td.cell,
+body.view-overview .transpose-table th.tcol-model { width: 30px; min-width: 30px; max-width: 30px; }
+body.view-details .transpose-table td.cell,
+body.view-details .transpose-table th.tcol-model { width: auto; min-width: 22px; max-width: none; }
+body.view-details .transpose-table td.cell { padding: 3px 2px; }
+body.view-details .transpose-table td.cell .cell-marker,
+body.view-details .transpose-table td.cell .cmp-marker { position: static; }
+body.view-details .transpose-table td.cell > a { position: absolute; inset: 0; }
+.transpose-table th.tcorner-case,
+.transpose-table th.tsection-col { background: #f5f5f5; vertical-align: bottom; }
+.transpose-table th.tsection-col { font-family: -apple-system, system-ui, sans-serif; font-size: 12px; }
+.transpose-table th.trow-case { white-space: nowrap; text-align: left; font-weight: 600; }
+.transpose-table th.trow-case a { color: inherit; text-decoration: none; }
+.transpose-table th.trow-case a:hover { background: #ffd; }
+/* Case-group banner rows reuse the original tr.section band, but centered: in the
+   transposed layout they span the full model width, so left-aligned reads lost. */
+.transpose-table tr.section td { background: #eef; font-weight: bold; text-align: center; padding-left: 0.5ch; padding-right: 0.5ch; }
+/* Column-header note for candidates whose capture has no per-chunk timing (e.g. the
+ * v1 jail bursts at end-of-call); their per-chunk cells stay em-dashes. */
+.ttip .ttip-note { color: #9aa4b2; font-weight: 400; font-size: 11px; white-space: normal; }
+
+/* Fresh-load state: the server-rendered pinned colors are NOT the compare model the
+ * page settles on — showing them first reads as a false green that then flips.
+ * Until the first applyCtl pass, cells render neutral and a loading note shows;
+ * conformance.js removes body.cmp-loading when the compare model has been applied. */
+body.cmp-loading td.cell { background: #eef0f3 !important; }
+body.cmp-loading td.cell .cmp-marker, body.cmp-loading td.cell .cell-marker { visibility: hidden; }
+.cmp-loading-note { display: none; }
+body.cmp-loading .cmp-loading-note { display: block; position: fixed; top: 8px; right: 12px;
+  background: #fff7e0; border: 1px solid #e5c765; color: #7a5d00; padding: 4px 10px;
+  border-radius: 4px; font: 12px ui-monospace, monospace; z-index: 99; }
+
+/* Whitespace markers in popup OUTPUT strings (↵ ␍ ⇥ ·): rendered as small
+   highlighted chips — a steel-blue background block against the dark tooltip
+   (#0b1220..#1e293b) makes every space/tab/return unmistakable, the way diff
+   tools highlight whitespace. user-select:none keeps the marks out of copied
+   text. */
+.ttip .wsmk {
+  background: #2f4f7a;
+  color: #d6e6ff;
+  border-radius: 2px;
+  padding: 0 1px;
+  user-select: none;
+}
+
+/* Popup output field labels + their quotes (reasoning_text, normal_text,
+   input_text, calls, args, name — one convention): the blue input-text color.
+   Fixture `explanation:` notes are secondary -> gray. */
+.ttip .fldl { color: #93c5fd; }
+.ttip .expl { color: #9ca3af; }

@@ -38,7 +38,7 @@ def _hrefs_for_output(output_path: Path, artifact_root: Path) -> dict[str, str]:
         return _href_from_output(output_path, artifact_root, rel)
 
     return {
-        "toolcalling_fixtures": h("conformance/toolcalling/fixtures/"),
+        "toolcalling_fixtures": h("conformance/toolcalling/fixtures-v1/"),
         "toolcalling_stream_fixtures": h("conformance/toolcalling/fixtures-stream-v2/"),
         "toolcalling_batch_on_stream_fixtures": h(
             "conformance/toolcalling/fixtures-batch-on-stream-v2/"
@@ -49,12 +49,55 @@ def _hrefs_for_output(output_path: Path, artifact_root: Path) -> dict[str, str]:
             "conformance/utils/lib/parsers/TOOLCALLING_STREAMING_V2_CASES.md"
         ),
         "reasoning_cases": h("conformance/utils/lib/parsers/REASONING_CASES.md"),
-        "toolcalling_src": h("parsers/src/tool_calling/"),
-        "reasoning_src": h("parsers/src/reasoning/"),
-        "streaming_src": h("parsers_v2/src/tool_calling/"),
-        "streaming_harmony_src": h("parsers_v2/src/tool_calling/harmony.rs"),
+        "toolcalling_src": h("parsers/v1/src/tool_calling/"),
+        "reasoning_src": h("parsers/v1/src/reasoning/"),
+        "streaming_src": h("parsers/v2/src/tool_calling/"),
+        "streaming_harmony_src": h("parsers/v2/src/tool_calling/harmony.rs"),
         "pyproject_stub": h("conformance/utils/src/pyproject.stub.toml"),
     }
+
+
+# Fixture YAMLs aren't loose in the repo — they're LFS tarballs under
+# conformance/fixtures/, extracted into the local cache
+# (~/.cache/dynamo/conformance-fixtures/, or $CONFORMANCE_FIXTURES_ROOT). The store
+# holds only the tarballs (no per-file URL), so a
+# per-cell YAML link points at the extracted file in that cache via file://. The
+# rendered `__fixture_path` is the flat resolved-tree path the readers use; remap it to
+# the versioned cache layout (the shared `inputs/` tree carries the model_text /
+# description a viewer wants to see).
+def _fixtures_cache_root() -> str:
+    env = os.environ.get("CONFORMANCE_FIXTURES_ROOT")
+    if env:
+        return env.rstrip("/")
+    xdg = os.environ.get("XDG_CACHE_HOME")
+    base = Path(xdg) if xdg else Path.home() / ".cache"
+    return str(base / "dynamo/conformance-fixtures")
+
+
+def _fixture_cache_relpath(rel: str) -> str:
+    """Map a rendered `<family>/<FILE>` fixture path to its versioned cache location.
+    The renderers resolve batch + v1-stream into a single flat `fixtures/` dir, so the
+    corpus can't be told from the path prefix — route on the FILE name instead."""
+    parts = rel.lstrip("./").split("/")
+    fname = parts[-1]
+    family = parts[-2] if len(parts) >= 2 else ""
+    if fname.startswith("REASONING."):
+        corpus = "reasoning/fixtures-v1/inputs"
+    elif fname.startswith("TOOLCALLING.streamv2"):
+        corpus = "toolcalling/fixtures-stream-v2/inputs"
+    elif fname.startswith("TOOLCALLING."):  # batch + v1 stream both live in the v1 corpus
+        corpus = "toolcalling/fixtures-batch-v1/inputs"
+    else:
+        return rel.lstrip("./")
+    return f"{corpus}/{family}/{fname}"
+
+
+def fixture_href(rel: str) -> str:
+    """Map a rendered fixture path to a file:// link into the local fixture cache.
+    Leaves absolute URLs and empty strings untouched."""
+    if not rel or "://" in rel:
+        return rel
+    return "file://" + _fixtures_cache_root() + "/" + _fixture_cache_relpath(rel)
 
 
 # Render-context: the active generator sets this for its destination before the
@@ -76,7 +119,7 @@ def set_links(output_path: Path, artifact_root: Path) -> dict[str, str]:
 # its real destination on every render.
 try:
     _DEFAULT_ROOT = Path(__file__).resolve().parents[4]
-    if (_DEFAULT_ROOT / "parsers_v2").is_dir():
+    if (_DEFAULT_ROOT / "parsers" / "v2").is_dir():
         set_links(_DEFAULT_ROOT / "conformance" / "PARITY.html", _DEFAULT_ROOT)
 except (IndexError, OSError):
     pass
@@ -278,6 +321,59 @@ def ref_text(value: Any) -> str:
     return str(value)
 
 
+# --- Shared candidate-chart scaffold -----------------------------------------
+# Every popup chart (stream per-version, merged batch, reasoning, and the legacy
+# per-impl grid) is the same <table class="ttip-chunks"> with a fixed `input`
+# column plus per-candidate columns; only the columns/rows differ. These helpers
+# own that scaffold so the four builders don't each re-template it (and so the
+# `data-cand` / `data-col-impl` attribute the compare JS keys on can't drift).
+
+
+def field_html(name: str, inner_html: str, *, cls: str = "fldl", quoted: bool = True) -> str:
+    """Uniform `name='value'` rendering for popup output fields. One convention
+    everywhere (reasoning_text/normal_text/input_text/calls/args/name alike):
+    SINGLE quotes, label + quotes in the blue input-text convention ("fldl").
+    `quoted=False` for non-string values (lists/JSON) colors the label only."""
+    if not quoted:
+        return f'<span class="{cls}">{name}=</span>{inner_html}'
+    return (
+        f'<span class="{cls}">{name}=&#39;</span>'
+        f"{inner_html}"
+        f'<span class="{cls}">&#39;</span>'
+    )
+
+
+def cand_th(key: str, inner: str, *, attr: str = "data-cand") -> str:
+    """A candidate-chart column header. `key` becomes the `attr` value the compare
+    JS toggles/reorders; `inner` is already-rendered (escaped) HTML."""
+    return f'<th {attr}="{html_lib.escape(key, quote=True)}">{inner}</th>'
+
+
+def cand_td(key: str, inner: str, *, attr: str = "data-cand") -> str:
+    """A candidate-chart body cell (see cand_th). `inner` is already-rendered HTML."""
+    return f'<td {attr}="{html_lib.escape(key, quote=True)}">{inner}</td>'
+
+
+def timing_note(reason: str) -> str:
+    """The muted `(… per-chunk timing not recorded)` header note the stream charts
+    add to a column whose capture is not per-input-chunk aligned. `reason` is the
+    parenthetical text (e.g. `bursts at end of call; per-chunk timing not recorded`)."""
+    return f' <span class="ttip-note">({html_lib.escape(reason)})</span>'
+
+
+def candidate_chart_table(header_cells: str, body_rows: list[str]) -> str:
+    """Assemble the shared chart <table>: fixed `input` column + per-candidate
+    columns (header_cells), then body_rows. Callers build the columns/rows;
+    the scaffold lives here once."""
+    return (
+        '<table class="ttip-chunks"><thead><tr><th>input</th>'
+        + header_cells
+        + "</tr></thead><tbody>"
+        + "".join(body_rows)
+        + "</tbody></table>"
+    )
+
+
 def build_parity_tooltip_html(
     *,
     head: str,
@@ -289,6 +385,7 @@ def build_parity_tooltip_html(
     leak_label: str | None = None,
     leak_text: str | None = None,
     extra_sections: list[tuple[str, str]] | None = None,
+    chart: tuple[str, str] | None = None,
     refs: list[tuple[str, Any]] | None = None,
 ) -> str:
     """Build the hover popup used by parser and reasoning parity tables.
@@ -304,15 +401,35 @@ def build_parity_tooltip_html(
     if description:
         parts.append(f'<pre class="ttip-pre">{html_lib.escape(description)}</pre>')
 
-    def add_section(label: str, body_html: str) -> None:
-        parts.append(f'<div class="ttip-section">{html_lib.escape(label)}:</div>')
-        parts.append(f'<pre class="ttip-pre">{body_html}</pre>')
+    def add_section(
+        label: str, body_html: str, wrap_class: str | None = None, leak: bool = False
+    ) -> None:
+        # A leaking candidate gets a red ↯ after the label, e.g. "… (stream): ↯".
+        marker = ' <span class="ttip-leak">↯</span>' if leak else ""
+        section = (
+            f'<div class="ttip-section">{html_lib.escape(label)}:{marker}</div>'
+            f'<pre class="ttip-pre">{body_html}</pre>'
+        )
+        # Optional wrapper lets callers toggle a whole labeled section (e.g. the
+        # per-version output blocks swapped by the version radios).
+        if wrap_class:
+            section = f'<span class="{wrap_class}">{section}</span>'
+        parts.append(section)
 
     if input_label and input_html is not None:
         add_section(input_label, input_html)
 
-    for label, body_html in output_sections or []:
-        add_section(label, body_html)
+    for section in output_sections or []:
+        add_section(*section)
+
+    # Candidate chart (left-to-right per-candidate output table). Raw table HTML —
+    # not a <pre> section — toggled/REF-ordered by the shared compare JS.
+    if chart:
+        chart_label, chart_html = chart
+        parts.append(
+            f'<div class="ttip-section">{html_lib.escape(chart_label)}:</div>'
+        )
+        parts.append(chart_html)
 
     if divergent_reasons:
         add_section("Divergent reasons", linkify_text_html(divergent_reasons))

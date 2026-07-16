@@ -4,7 +4,7 @@ This is the single source of truth for the parser v1/v2 bridge, the temporary Dy
 
 ## Terminology
 
-`v1` means Dynamo-synced parser code, fixtures, and old parity renderer behavior. During the bridge period, v1 lives in `parsers/src/`, `conformance/toolcalling/fixtures/`, `conformance/reasoning/fixtures/`, `conformance/utils/tests/parity/`, and `conformance/utils/lib/parsers/*_CASES.md`.
+`v1` means Dynamo-synced parser code, fixtures, and old parity renderer behavior. During the bridge period, v1 lives in `parsers/src/`, `conformance/toolcalling/fixtures-batch-v1/`, `conformance/reasoning/fixtures/`, `conformance/utils/tests/parity/`, and `conformance/utils/lib/parsers/*_CASES.md`.
 
 `v2` means frontend-crate-owned parser code, Python binding code, stream fixtures, batch-on-stream fixtures, and conformance renderer behavior. During the bridge period, v2 lives in `parsers_v2/`, `parsers_v2-py/`, `conformance/toolcalling/fixtures-stream-v2/`, `conformance/toolcalling/fixtures-batch-on-stream-v2/`, `conformance/utils/src/generate_conformance_table.py`, and `conformance/utils/src/conformance_table.html.j2`.
 
@@ -22,7 +22,7 @@ Do not move v2 parser code into `parsers/src/` until Dynamo consumes the release
 |---|---|---|
 | `parsers/src/` | v1 Dynamo-synced | Resettable to Dynamo. Do not put v2 work here yet. |
 | `parsers/tests/` | v1 Dynamo-synced when present upstream | Resettable to Dynamo. |
-| `conformance/toolcalling/fixtures/` | frontend-crates legacy v1 | Batch tool-calling fixtures retained for v1 behavior. Do not hand-edit for v2 behavior. |
+| `conformance/toolcalling/fixtures-batch-v1/` | frontend-crates legacy v1 | Batch tool-calling fixtures retained for v1 behavior. Do not hand-edit for v2 behavior. |
 | `conformance/reasoning/fixtures/` | frontend-crates legacy v1 | Reasoning fixtures rendered in the conformance table. |
 | `conformance/utils/tests/parity/` | v1 Dynamo-synced | Old Dynamo parity generator package. Keep it close to Dynamo so `PARITY_v1.html` stays old-output compatible. |
 | `conformance/utils/lib/parsers/TOOLCALLING_CASES.md` and `REASONING_CASES.md` | v1 Dynamo-synced | Case docs used by the old v1 renderer. |
@@ -101,7 +101,7 @@ These files have no upstream Dynamo counterpart. Never overwrite them during a s
 | `conformance/toolcalling/fixtures-batch-on-stream-v2/` | v2 batch-on-stream fixture overlays. |
 | `conformance/utils/src/_common.sh` | Shared stage builder for conformance scripts. |
 | `conformance/utils/check.sh` | Runs local-parser, vLLM, and SGLang checks against staged fixtures; v2 local-parser checks run Dynamo parser v2 code. |
-| `conformance/utils/render_table_v2.sh` | Renders `conformance/CONFORMANCE.html` with the v2 conformance generator. |
+| `conformance/utils/render_table_v2.sh` | Renders `conformance/CONFORMANCE_v2.html` with the v2 conformance generator. |
 | `conformance/utils/render_table_v1.sh` | Renders `.stage/tests/parity/PARITY_v1.html` with old Dynamo `generate_parity_table.py`. |
 | `conformance/utils/src/validate.py` | Cross-implementation validation via `docker exec` or pip. |
 | `conformance/utils/src/build_stream_fixtures.py` | Builds v2 per-chunk stream fixtures from source cases and captured engine output. |

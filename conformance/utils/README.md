@@ -1,6 +1,6 @@
 # Conformance/Utils
 
-This directory is for checking parser behavior and generating an HTML conformance matrix. By default `render_table_v2.sh` writes `conformance/CONFORMANCE.html`, but you can write another file such as `index.html`.
+This directory is for checking parser behavior and generating an HTML conformance matrix. By default `render_table_v2.sh` writes `conformance/CONFORMANCE_v2.html`, but you can write another file such as `index.html`.
 
 Most work has three steps:
 
@@ -18,7 +18,7 @@ For tool-calling, the important fields are:
 |---|---|
 | `model_text` | Complete model output for batch-style parsing. |
 | `chunks[].delta_text` / `chunks[].delta_token_ids` | Incremental model output for stream-style parsing. |
-| `expected.dynamo_rust` | Dynamo Rust parser output. |
+| `expected.dynamo_v1` / `expected.dynamo_v2` | Dynamo v1 (batch+jail) / v2 (stream) parser output — two SEPARATE impls, like `vllm_python` vs `vllm_rust`. |
 | `expected.vllm_rust` | vLLM Rust parser output captured from a vLLM source checkout. |
 | `expected.vllm_python` | vLLM Python parser output captured from the pinned Python package. |
 | `expected.sglang_python` | SGLang Python parser output captured from the pinned Python package. |
@@ -27,28 +27,30 @@ For tool-calling, the important fields are:
 
 Fixture locations:
 
-| Path | Used By |
+All fixture YAMLs live in the repo as git-lfs tarball shards under `conformance/fixtures/` and are extracted automatically on first use via `extract_fixtures.py`. Do NOT commit loose fixture YAMLs — rebuild the shard store via `package_fixtures.py` instead (see "Fixture Store" below). `conformance/utils/src/parser_families.yaml` is a parser config file, not a fixture — it stays loose in the repo.
+
+| Store path (inside snapshot) | Used By |
 |---|---|
-| `conformance/toolcalling/fixtures/` | `TC batch (v1)` tab. Complete model output through batch parsers. |
-| `conformance/toolcalling/fixtures-batch-on-stream-v2/` | `TC batch-on-stream (v2)` tab. Complete batch text through streaming parsers. |
-| `conformance/toolcalling/fixtures-stream-v2/` | `TC stream (v2)` tab. Incremental chunks through streaming parsers. |
-| `conformance/reasoning/fixtures/` | Reasoning parser tabs. |
+| `toolcalling/fixtures-batch-v1/` | `TC batch (v1)` tab. Complete model output through batch parsers. |
+| `toolcalling/fixtures-batch-on-stream-v2/` | `TC batch-on-stream (v2)` tab. Complete batch text through streaming parsers. |
+| `toolcalling/fixtures-stream-v2/` | `TC stream (v2)` tab. Incremental chunks through streaming parsers. |
+| `reasoning/fixtures-v1/inputs/` | Reasoning parser tabs. |
 
 ## Parser Implementations
 
 Keep the implementation and mode separate when reading or updating fixtures.
 
-- Dynamo v1 is batch only. It writes `expected.dynamo` in `conformance/toolcalling/fixtures/`. This is the current batch baseline, not the upcoming v2 stream parser.
-- Dynamo v2 Rust is stream and batch-on-stream. It writes `expected.dynamo_rust` in new v2 fixture shapes, though some older example fixtures still use `expected.dynamo`. This is the upcoming Dynamo-owned Rust stream parser. Harmony is only the example wired today; DS4 and the other v2 stream parsers should use the same flow as they land.
+- Dynamo v1 is batch only. It writes `expected.dynamo_v1` in `conformance/toolcalling/fixtures-batch-v1/`. This is the current batch baseline, not the upcoming v2 stream parser. **v1 is interim** — it is removed outright once v2 reaches parity.
+- Dynamo v2 Rust is stream and batch-on-stream. It writes `expected.dynamo_v2` in new v2 fixture shapes. This is the upcoming Dynamo-owned Rust stream parser — **the ultimate implementation (WIP)** that fully replaces v1. Harmony is only the example wired today; DS4 and the other v2 stream parsers should use the same flow as they land.
 - vLLM Python is batch and stream. Legacy batch fixtures use `expected.vllm`; v2 fixtures use `expected.vllm_python`. Batch output is vLLM's complete-text parser. Stream output is vLLM's streaming parser.
 - vLLM Rust is stream only. It writes `expected.vllm_rust`. vLLM Rust does not expose a separate batch parser here. Complete text is tested by feeding the full text through the Rust streaming parser.
 - SGLang Python is batch and stream where SGLang has a detector for that family. Legacy batch fixtures use `expected.sglang`; v2 fixtures use `expected.sglang_python`. Missing detectors are recorded under `unavailable.sglang_python`.
 
 ## 1. Verify
 
-Run this when you want to check the local Dynamo parser code, the conformance table generator (`conformance/utils/`), and the committed YAML fixtures.
+Run this when you want to check the local Dynamo parser code, the conformance table generator (`conformance/utils/`), and the fixture YAMLs from the in-repo store.
 
-The verification-only path reads committed YAML and reports mismatches. It does not rewrite fixture YAML. The vLLM and SGLang verification commands run live peer parsers against committed expected output, but they do not recapture or update fixtures.
+The verification-only path reads the extracted fixtures and reports mismatches. It does not rewrite fixture YAML. The vLLM and SGLang verification commands run live peer parsers against the extracted expected output, but they do not recapture or update fixtures.
 
 ```bash
 # Runs Python regression tests for table generation, marker semantics, vLLM Rust capture plumbing, and path scrubbing.
@@ -57,19 +59,19 @@ python3 -m pytest conformance/utils/tests/test_stream_on_batch.py
 # Runs Rust smoke tests (quick check) for the v2 parser implementation.
 cargo test --locked -p dynamo-parsers-v2 -- --nocapture
 
-# Runs fixture-based tests against committed YAML fixtures for Dynamo Rust parser behavior.
+# Runs fixture-based tests against the extracted YAML fixtures for Dynamo Rust parser behavior.
 cargo test --locked -p dynamo-conformance-fixtures-v2 -- --nocapture
 
-# Example: check Dynamo v1 batch behavior against committed `expected.dynamo` blocks in `conformance/toolcalling/fixtures/`.
+# Example: check Dynamo v1 batch behavior against extracted `expected.dynamo_v1` blocks in `toolcalling/fixtures-batch-v1/`.
 conformance/utils/check.sh dynamo batch
 
 # Example: check Dynamo v2 stream fixtures and Dynamo v2 batch-on-stream behavior.
 conformance/utils/check.sh dynamo stream
 
-# Example: check vLLM Python batch and stream behavior against committed legacy `expected.vllm` and v2 `expected.vllm_python` blocks.
+# Example: check vLLM Python batch and stream behavior against extracted legacy `expected.vllm` and v2 `expected.vllm_python` blocks.
 conformance/utils/check.sh vllm --container vllm-localdev
 
-# Example: check SGLang Python batch and stream behavior against committed legacy `expected.sglang` and v2 `expected.sglang_python` blocks.
+# Example: check SGLang Python batch and stream behavior against extracted legacy `expected.sglang` and v2 `expected.sglang_python` blocks.
 conformance/utils/check.sh sglang --container sglang-localdev
 
 # Formats Rust changes.
@@ -83,20 +85,20 @@ If you only changed docs or the HTML generator, the Python regression test and `
 
 ## 2. Update Code Or Fixtures
 
-Change parser code under `parsers_v2/` when Dynamo behavior is wrong. Change fixture YAML when expected output changed, new peer output was captured, or a new case was added.
+Change parser code under `parsers/v2/` when Dynamo behavior is wrong. When fixture output changes or a new case is added, capture locally then rebuild + commit a new snapshot via `package_fixtures.py`.
 
 ### Capture Parser Behavior Into Fixtures
 
-Use the same pattern for capture commands: `conformance/utils/capture.sh <target> ...`. The `stream` and `batch-on-stream` targets update v2 fixture YAML. The `dynamo-stream`, `dynamo-batch-on-stream`, and `token-ids` targets capture local Dynamo Rust behavior or token IDs used by fixture updates.
+Use the same pattern for capture commands: `conformance/utils/capture.sh <target> ...`. The `stream` and `batch-on-stream` targets capture v2 fixture YAMLs locally. The `dynamo-stream`, `dynamo-batch-on-stream`, and `token-ids` targets capture local Dynamo Rust behavior or token IDs. After capturing, rebuild + commit the shard store with `package_fixtures.py`.
 
-`capture.sh` is not the v1 batch rewrite tool. Dynamo v1 batch, vLLM Python batch, and SGLang Python batch are verified in Section 1 against committed fixtures. Change those YAML files directly when the committed batch expectation is wrong.
+`capture.sh` is not the v1 batch rewrite tool. Dynamo v1 batch, vLLM Python batch, and SGLang Python batch are verified in Section 1 against extracted fixtures. Update those YAMLs locally and re-package when the expected batch output changes.
 
 Harmony fixture paths below are examples only. Harmony is not the intended scope limit. As DS4 and the other v2 stream parsers land, use the same commands with those fixture paths and families.
 
 ```bash
 # Example: capture one Dynamo v2 Rust stream fixture into JSON for manual fixture editing.
 conformance/utils/capture.sh dynamo-stream \
-  --fixture conformance/toolcalling/fixtures-stream-v2/harmony/TOOLCALLING.streamv2.1.yaml \
+  --fixture conformance/toolcalling/fixtures-stream-v2/inputs/harmony/TOOLCALLING.streamv2.1.yaml \
   --output /tmp/dynamo_stream.json
 
 # Example: capture all vLLM Python, vLLM Rust, and SGLang Python stream behavior, then refresh `fixtures-stream-v2/`.
@@ -148,10 +150,10 @@ The local checkout path is not written to YAML or HTML. Fixtures record only the
 
 ## 3. Generate Matrix
 
-Run this after updating code or fixture YAML.
+Run this after updating code or committing new fixture snapshots.
 
 ```bash
-# Generates an HTML matrix at the default example path: `conformance/CONFORMANCE.html`.
+# Generates an HTML matrix at the default example path: `conformance/CONFORMANCE_v2.html`.
 conformance/utils/render_table_v2.sh
 
 # Generates the same matrix at a custom path, for example `index.html`.
@@ -161,9 +163,9 @@ conformance/utils/render_table_v2.sh --output index.html
 conformance/utils/render_table_v2.sh --dry-run
 ```
 
-Open the generated HTML file in a browser. The table is generated from the committed fixture directories plus the staged v2 fixture view built by `render_table_v2.sh`.
+Open the generated HTML file in a browser. The table is generated from extracted fixture directories staged by `render_table_v2.sh`.
 
-Use the generated matrix to inspect vLLM Python vs vLLM Rust behavior. `check.sh vllm` runs the live vLLM Python parser against committed YAML; it does not run vLLM Rust. vLLM Python vs Rust is a committed fixture comparison in the `TC stream (v2)` and `TC batch-on-stream (v2)` tabs.
+Use the generated matrix to inspect vLLM Python vs vLLM Rust behavior. `check.sh vllm` runs the live vLLM Python parser against extracted YAML; it does not run vLLM Rust. vLLM Python vs Rust is a fixture comparison in the `TC stream (v2)` and `TC batch-on-stream (v2)` tabs.
 
 ## Matrix Legend
 
@@ -193,12 +195,56 @@ Run these from `conformance/utils/`:
 
 | Command | Purpose |
 |---|---|
-| `render_table_v2.sh` | Builds `.stage/` and writes the v2 conformance HTML matrix. The default example path is `conformance/CONFORMANCE.html`. |
+| `render_table_v2.sh` | Builds `.stage/` and writes the v2 conformance HTML matrix. The default example path is `conformance/CONFORMANCE_v2.html`. |
 | `render_table_v1.sh` | Renders the legacy v1 Dynamo parity table into `.stage/`. |
 | `check.sh` | Runs Dynamo, vLLM Python, and SGLang checks against staged fixtures. |
 | `capture.sh` | Consistent entry point for capturing parser behavior and refreshing v2 fixtures. |
 
 The implementation lives under `src/` — don't run these directly unless you're developing the harness: `_common.sh`, the renderer (`generate_conformance_table.py` + `impls.py` / `markers.py` / `fixtures.py`, `conformance_table.html.j2` + `assets/`), the capture chain (`capture_cli.py` / `capture_driver.py` / `capture.py` / `capture_vllm_rust.py`), the fixture builders (`build_stream_fixtures.py` / `fill_streamv2.py` / `gen_harmony_text_fixtures.py`), the validators (`validate.py` / `validate_fixtures.py`), and the data files (`parser_families.yaml`, `pyproject.stub.toml`). `tests/` and `lib/` stay at the top level because they are Dynamo-sync targets.
+
+## Fixture Store (git-lfs)
+
+Fixture shard tarballs live in the repo at `conformance/fixtures/`, tracked via git-lfs (`.gitattributes`). The manifest (`conformance/fixtures-manifest.json`) pins the current snapshot and the sha256 of every shard. On a fresh clone, make sure the LFS objects are present: `git lfs install && git lfs pull`.
+
+### Run conformance tests (fixtures extract transparently)
+
+Extraction is cached locally; subsequent runs are instant. No token, no network.
+
+```bash
+python3 conformance/utils/src/extract_fixtures.py
+conformance/utils/check.sh dynamo all        # batch + stream + batch-via-stream
+conformance/utils/check.sh vllm --container <name>
+conformance/utils/check.sh sglang --container <name>
+```
+
+Fixtures always extract to `~/.cache/dynamo/conformance-fixtures/` (or `$XDG_CACHE_HOME/dynamo/conformance-fixtures/` if set). Stable symlinks `toolcalling/` and `reasoning/` point at the current snapshot subdir. Cache hit = the script compares the manifest pin against the local state file and exits immediately if they match.
+
+To see what snapshot is pinned and whether it is already cached:
+
+```bash
+python3 conformance/utils/src/extract_fixtures.py --info
+```
+
+### Update existing fixtures (re-capture after a parser version bump)
+
+After re-capturing YAML locally with `capture.sh`, rebuild the store and commit it together with the manifest:
+
+```bash
+# 1. Re-capture (see capture.sh commands above)
+
+# 2. Rebuild the shard store + manifest
+python3 conformance/utils/src/package_fixtures.py
+
+# 3. Commit the store + manifest pin (shards are LFS-tracked)
+git add conformance/fixtures conformance/fixtures-manifest.json
+git commit -s -m "fixtures: snapshot <stamp printed by the script>"
+```
+
+The script builds deterministic per-version shard tarballs (mtime/uid normalized, so unchanged trees produce byte-identical shards and no git churn), removes stale shards no longer in the set, and writes the new manifest.
+
+### Add new fixtures (new SGLang / vLLM / Dynamo family)
+
+Add YAML files locally under the appropriate fixture tree, then publish a new snapshot exactly as above. The new family appears as a new subdirectory in the tarball; warm-path downloads on other machines will fetch only the shard(s) that changed.
 
 ## Notes
 

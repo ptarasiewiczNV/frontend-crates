@@ -18,7 +18,8 @@ import re
 from typing import Any
 
 from impls import (
-    BASELINE_IMPL,
+    BASELINE_IMPLS,
+    BASELINE_STREAM_IMPL,
     BATCH_IMPL_KEYS,
     ENGINE_LETTER,
     IMPL_DISPLAY,
@@ -87,7 +88,7 @@ def peer_status(case: dict, dyn: dict, impl: str) -> tuple[str, bool]:
       'unavail' — peer block is `{unavailable: <msg>}`
       'err'     — peer block is `{error: <substring>}`
       'div'     — peer block is a concrete divergent {calls, normal_text}
-    is_unknown is True iff kind == 'div' AND block has no `reason:`.
+    is_unknown is True iff kind == 'div' AND block has no `explanation:`.
     """
     block = _impl_get(case.get("expected") or {}, impl)
     if block is None:
@@ -112,7 +113,7 @@ def peer_status(case: dict, dyn: dict, impl: str) -> tuple[str, bool]:
         }
         if n_block == n_dyn:
             return ("match", False)
-        return ("div", "reason" not in block)
+        return ("div", _explanation(block) is None)
     return ("na", False)
 
 
@@ -124,13 +125,25 @@ _TOOL_CALL_MARKUP_RE = re.compile(
 )
 
 
+def _explanation(block: object) -> str | None:
+    """The intentional-divergence note on an expected block. `explanation` is the
+    current key; `reason` is the legacy spelling still present in older fixtures and
+    Dynamo-synced code. Read both (explanation wins); new fixtures/captures write
+    `explanation`."""
+    if not isinstance(block, dict):
+        return None
+    v = block.get("explanation")
+    return v if v is not None else block.get("reason")
+
+
 def _dynamo_tool_call_leak(dyn: dict) -> str | None:
     normal_text = dyn.get("normal_text")
-    if not dyn.get("reason") or not isinstance(normal_text, str):
+    note = _explanation(dyn)
+    if not note or not isinstance(normal_text, str):
         return None
     if not _TOOL_CALL_MARKUP_RE.search(normal_text):
         return None
-    return str(dyn["reason"])
+    return str(note)
 
 
 def _block_tool_call_leaks(block: dict) -> bool:
@@ -147,8 +160,9 @@ def _overview_status(case: dict | None, impl: str) -> str:
     if not isinstance(block, dict) or "unavailable" in block:
         if _is_parser_error_unavailable(block):
             return "problem"
-        if impl == BASELINE_IMPL and _is_todo_unavailable(block):
-            return "todo"
+        # A family the Dynamo v2 stream parser doesn't implement is a plain neutral
+        # n/a (like the v1 table, which has no "TODO" concept) — not a distinct
+        # orange "todo" state.
         return "na"
     if "error" in block or _block_tool_call_leaks(block):
         return "problem"
@@ -160,10 +174,18 @@ def _impl_keys_for_output_kind(output_kind: str) -> tuple[str, ...]:
 
 
 def _overview_status_attrs(case: dict | None, impl_keys: tuple[str, ...] = BATCH_IMPL_KEYS) -> str:
-    return " ".join(
+    parts = [
         f'data-status-{impl}="{_overview_status(case, impl)}"'
         for impl in impl_keys
-    )
+    ]
+    # Per-version status (data-status-<impl>-<slug>) powers the TC v1 version radios.
+    # Only batch cases carry __ver_status; other cells fall back to the pinned attr.
+    ver_status = case.get("__ver_status") if isinstance(case, dict) else None
+    if ver_status:
+        for impl, by_slug in ver_status.items():
+            for slug, info in by_slug.items():
+                parts.append(f'data-status-{impl}-{slug}="{info["status"]}"')
+    return " ".join(parts)
 
 
 def _canonical_tool_output(block: object) -> dict | None:
@@ -283,8 +305,8 @@ def _parser_marker(case: dict | None, impl: str) -> str:
     if not isinstance(block, dict) or "unavailable" in block:
         if _is_parser_error_unavailable(block):
             return "✗"
-        if impl == BASELINE_IMPL and _is_todo_unavailable(block):
-            return "…"
+        # Un-implemented Dynamo v2 family: plain neutral n/a, no distinct "…" TODO
+        # marker (matches the v1 table's clean look; see _overview_status).
         return "n/a"
     if "error" in block:
         # B11: a structured (dict) error = a peer parser ran and threw -> `✗`;
@@ -292,7 +314,7 @@ def _parser_marker(case: dict | None, impl: str) -> str:
         return "✗" if isinstance(block["error"], dict) else "!"
     if _block_tool_call_leaks(block):
         return "↯"
-    if impl == BASELINE_IMPL:
+    if impl in BASELINE_IMPLS:
         peers = [_impl_get(expected, peer) for peer in PEER_IMPL_KEYS]
         if all(
             peer is None or (isinstance(peer, dict) and "unavailable" in peer)
@@ -443,7 +465,7 @@ def _sob_status(case: dict | None, impl: str) -> str:
     if not isinstance(stream, dict) or "unavailable" in stream:
         if _is_parser_error_unavailable(stream):
             return "problem"
-        return "todo" if (impl == BASELINE_IMPL and _is_todo_unavailable(stream)) else "na"
+        return "na"
     if "error" in stream or _block_tool_call_leaks(stream):
         return "problem"
     consistent = _sob_calls_consistent(case, impl)
@@ -467,7 +489,7 @@ def _stream_xeng_marker(case: dict | None, impl: str, marker_context: str | None
         vLLM Python stream output, including batch-on-stream) for engines whose output differs
         from this one (needs >=2 available outputs).
     Returns the `↯` leak prefix + own-batch token + cross-engine tokens, `=` when
-    none, or the per-engine status marker (`…`/`n/a`) when this engine has no
+    none, or the per-engine status marker (`n/a`) when this engine has no
     stream output."""
     if case is None:
         return "—"
@@ -523,4 +545,4 @@ def _sob_marker_spans(case: dict | None, marker_context: str | None = None) -> s
 
 def _sob_cell_text(case: dict | None, marker_context: str | None = None) -> str:
     """Static/overview cell text: the Dynamo cross-engine marker (=, V_ps/V_rs/S_rs, …)."""
-    return _stream_xeng_marker(case, BASELINE_IMPL, marker_context)
+    return _stream_xeng_marker(case, BASELINE_STREAM_IMPL, marker_context)

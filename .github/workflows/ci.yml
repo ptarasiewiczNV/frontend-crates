@@ -2,14 +2,43 @@ name: ci
 
 on:
   push:
-    branches: [main]
-  pull_request:
+    # `pull-request/<n>` is the internal mirror branch copy-pr-bot pushes after a
+    # maintainer runs `/ok to test <sha>`. External contributions run CI from the
+    # mirror so maintainers vet the code before it executes with repo access.
+    branches:
+      - main
+      - "pull-request/[0-9]+"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  # Decide which optional jobs need to run for this change. `conformance-table`
+  # is expensive (downloads the private fixture dataset, renders both charts) and
+  # is only affected by conformance/parser changes, so skip it otherwise.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      conformance: ${{ steps.filter.outputs.conformance }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Detect conformance/parser changes
+        id: filter
+        uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
+        with:
+          filters: |
+            conformance:
+              - 'conformance/**'
+              - 'parsers/**'
+              - '.github/workflows/ci.yml'
+
   rust:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -19,6 +48,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # Fixture shards live in-repo under conformance/fixtures/ via git-lfs;
+          # cargo test extracts them locally (extract_fixtures.py, stdlib-only).
+          lfs: true
 
       - name: Install Rust
         run: rustup toolchain install
@@ -66,6 +99,8 @@ jobs:
   # breakage. Python + pyyaml/jinja2 only — no engines (vLLM/SGLang conformance runs in
   # dynamo's CI lanes; here the engine lanes are on-demand/local).
   conformance-table:
+    needs: changes
+    if: ${{ needs.changes.outputs.conformance == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -74,18 +109,34 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # Fixture shards live in-repo under conformance/fixtures/ via git-lfs;
+          # the render + guard steps extract them locally on first use.
+          lfs: true
 
       - name: Render conformance matrix (no engines)
         run: |
           python3 -m venv /tmp/pvenv
-          /tmp/pvenv/bin/pip install --quiet pyyaml jinja2
+          /tmp/pvenv/bin/pip install --quiet pyyaml jinja2 pytest
           PATH="/tmp/pvenv/bin:$PATH" conformance/utils/render_table_v1.sh
-          OUT=conformance/utils/.stage/tests/parity/PARITY_v1.html
+          PATH="/tmp/pvenv/bin:$PATH" conformance/utils/render_table_v2.sh
+          OUT=conformance/PARITY_v1.html
           test -s "$OUT"
           grep -q "TOOLCALLING.batch" "$OUT"
           grep -q "REASONING.batch" "$OUT"
+          test -s conformance/CONFORMANCE_v2.html
           echo "conformance matrix rendered: $(wc -c < "$OUT") bytes"
           cp "$OUT" conformance/utils/CONFORMITY.html
+
+      # Structural regression guard on the rendered charts: parser selectors present,
+      # every candidate versioned from fixture provenance (not the live Cargo.toml),
+      # all peer versions present, no "not yet implemented", coloring intact. Reuses the
+      # HTML rendered above. See conformance/utils/tests/test_chart_invariants.py.
+      - name: Chart invariants
+        run: |
+          PATH="/tmp/pvenv/bin:$PATH" python3 -m pytest \
+            conformance/utils/tests/test_chart_invariants.py \
+            conformance/utils/tests/test_stream_on_batch.py -q
 
       - name: Upload conformance matrix
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -95,10 +146,11 @@ jobs:
           retention-days: 14
 
       - name: Comment on PR
-        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name }}
+        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/heads/pull-request/') }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh pr comment "${{ github.event.pull_request.number }}" \
+          PR_NUMBER="${GITHUB_REF_NAME#pull-request/}"
+          gh pr comment "$PR_NUMBER" \
             --edit-last --create-if-none \
             --body "📊 **Conformance matrix** rendered — [view in CI summary](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"

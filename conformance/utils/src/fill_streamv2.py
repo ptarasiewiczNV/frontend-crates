@@ -5,8 +5,8 @@
 
 For each family + each batch case that has `model_text`, chunk the text into ~1-3
 "token" pieces, run the vLLM and SGLang streaming parsers over the chunks (inside
-the engine containers, one engine import each), and assemble the per-chunk fixture
-at conformance/toolcalling/fixtures-stream-v2/<family>/TOOLCALLING.streamv2.<N>.yaml.
+the engine containers, one engine import each), and assemble the per-chunk fixture locally, then commit to the in-repo LFS store
+(conformance/fixtures/) via `package_fixtures.py`.
 Dynamo is marked unavailable/TODO (no parser v2 stream parser for these families
 yet); the synthetic partial-token case `50` has no batch source and is left
 untouched.
@@ -79,7 +79,7 @@ def chunk_text(text):
 
 def _expects_calls(case):
     exp = case.get("expected") or {}
-    for impl in ("dynamo_rust", "vllm_rust", "vllm_python", "sglang"):
+    for impl in ("dynamo_v2", "vllm_rust", "vllm_python", "sglang"):
         b = exp.get(impl)
         if isinstance(b, dict) and b.get("calls"):
             return True
@@ -133,7 +133,7 @@ def main():
     ap.add_argument("--work", help="work dir (default: a fresh temp dir)")
     args = ap.parse_args()
 
-    fixtures_root = os.path.join(args.root, "conformance/toolcalling/fixtures")
+    fixtures_root = os.path.join(args.root, "conformance/toolcalling/fixtures-batch-v1")
     out_root = os.path.join(args.root, "conformance/toolcalling/fixtures-stream-v2")
     work = args.work or tempfile.mkdtemp(prefix="streamv2_fill_")
     srcdir = os.path.join(work, "src")
@@ -180,7 +180,7 @@ def main():
             outfp = os.path.join(outdir, base)
             cmd = ["python3", os.path.join(HERE, "build_stream_fixtures.py"),
                    "--source", fp, "--out", outfp,
-                   "--unavailable", f"dynamo_rust={DYNAMO_TODO}"]
+                   "--unavailable", f"dynamo_v2={DYNAMO_TODO}"]
             if vllm_rust_source:
                 cmd += cd._impl_args("vllm_rust", family, cd.VLLM_RUST.get(family),
                                      vllm_rust_caps.get(fp, {}),

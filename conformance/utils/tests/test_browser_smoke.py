@@ -59,7 +59,7 @@ def driver(rendered):
 def test_hover_shows_tooltip(driver):
     """Hovering a detail cell makes its `.ttip` visible (`.ttip-visible`)."""
     driver.execute_script(
-        "document.querySelector('input[name=\"parity-view\"][value=\"details\"]').click();"
+        "const v=document.querySelector('[data-view-detailed]'); if(v && !v.checked){v.checked=true; v.dispatchEvent(new Event('change'));}"
     )
     # Find a cell that actually has a tooltip, fire the hover event the page listens for.
     found = driver.execute_script(
@@ -87,14 +87,15 @@ def test_hover_shows_tooltip(driver):
     assert visible, "tooltip did not become visible on hover"
 
 
-def test_vllm_rust_option_hidden_on_reasoning(driver):
-    """The vLLM Rust parser radio shows on a tool-calling tab and hides on Reasoning."""
-    def vllm_rust_visible():
+def test_compare_candidates_are_per_tab(driver):
+    """Each tab's compare control carries its own candidate rows: the merged Tool
+    Calling (batch data) tab offers a vLLM Rust stream candidate; Reasoning does not.
+    (The candidates were `.chip` elements before the compare-bar rework (#98/#105)
+    replaced them with `.cmprow-label[data-cand]` rows.)"""
+    def cand_keys():
         return driver.execute_script(
-            """
-            const lbl = document.querySelector('label[data-parser-option="vllm_rust"]');
-            return !!(lbl && lbl.offsetParent !== null);
-            """
+            "const p=document.querySelector('.tab-panel.active .cmpctl');"
+            "return p?Array.from(p.querySelectorAll('.cmprow-label[data-cand]')).map(c=>c.dataset.cand):[];"
         )
 
     def click_tab(panel_id):
@@ -104,59 +105,200 @@ def test_vllm_rust_option_hidden_on_reasoning(driver):
         )
         time.sleep(0.2)
 
-    click_tab("tab-toolcalling-stream-on-batch")
-    assert vllm_rust_visible(), "vLLM Rust option should show on a tool-calling tab"
+    click_tab("tab-toolcalling-batch")
+    keys = cand_keys()
+    assert any("vllm_rust" in k for k in keys), "merged tab should offer a vLLM Rust candidate"
     click_tab("tab-reasoning-batch")
-    assert not vllm_rust_visible(), "vLLM Rust option should hide on Reasoning"
-    click_tab("tab-toolcalling-stream-on-batch")
-    assert vllm_rust_visible(), "vLLM Rust option should reappear on a tool-calling tab"
+    keys = cand_keys()
+    assert keys and not any("vllm_rust" in k for k in keys), (
+        "Reasoning should have candidates but no vLLM Rust"
+    )
 
 
-def test_conformance_mode_shows_one_marker_per_cell(driver):
-    """In Details + Conformance, a cell must not show BOTH the per-engine status
-    marker and the cross-engine parity marker — they're absolutely positioned in
-    the same box and visibly overlap if both display (the B7 CSS-order regression
-    that produced garbled markers like a struck-through `=`)."""
+def test_compare_shows_one_marker_per_cell(driver):
+    """In Details view a compare cell shows exactly one marker — the JS-filled
+    `.cmp-marker` — and the legacy per-engine `.cell-marker` spans stay hidden, so
+    nothing overlaps (the B7 CSS-order regression that garbled markers)."""
     driver.execute_script(
-        """
-        document.querySelector('input[name="parity-view"][value="details"]').click();
-        const par = document.querySelector('input[data-parity-toggle]');
-        if (par && !par.checked) par.click();
-        """
+        "const v=document.querySelector('[data-view-detailed]'); if(v && !v.checked){v.checked=true; v.dispatchEvent(new Event('change'));}"
     )
     time.sleep(0.2)
-    # For the selected parser, count cells where both its status marker and its
-    # parity marker are visibly rendered. Must be zero.
-    both_visible = driver.execute_script(
+    result = driver.execute_script(
         """
-        const sel = (document.body.className.match(/parser-(\\w+)/) || [])[1];
         const tab = document.querySelector('.tab-panel.active') || document;
         const vis = (el) => el && el.offsetParent !== null
             && getComputedStyle(el).display !== 'none';
-        let overlap = 0;
-        for (const cell of tab.querySelectorAll('td.cell')) {
-          const status = cell.querySelector('.marker-' + sel);
-          const parity = cell.querySelector('.marker-parity-' + sel);
-          if (vis(status) && vis(parity)) overlap++;
+        let overlap = 0, cmpShown = 0;
+        for (const cell of tab.querySelectorAll('td.cell[data-cmp]')) {
+          const legacy = Array.from(cell.querySelectorAll('.cell-marker')).some(vis);
+          const cmp = cell.querySelector('.cmp-marker');
+          if (legacy) overlap++;
+          if (vis(cmp) && cmp.textContent.trim()) cmpShown++;
         }
-        return overlap;
+        return {overlap, cmpShown};
         """
     )
-    assert both_visible == 0, (
-        f"{both_visible} cell(s) show both the status and parity marker overlapping"
+    assert result["overlap"] == 0, (
+        f"{result['overlap']} cell(s) still show a legacy marker alongside the compare marker"
     )
-    # And the parity marker IS the one shown for non-trivial cells.
-    parity_shown = driver.execute_script(
+    assert result["cmpShown"] > 0, "no compare marker is visible in Details view"
+
+
+def test_overview_hides_compare_column(driver):
+    """In Overview (Detailed off) the compare bar shows only the Reference picker;
+    the CMP checkboxes + header are hidden, because an overview cell's color is
+    leak-only (depends on the Reference, not the Compares). Turning Detailed on
+    reveals the CMP column again — the selections themselves are preserved."""
+    driver.execute_script(
+        "document.querySelector('.tab-button[data-tab-target=\"tab-toolcalling-batch\"]').click();"
+    )
+    time.sleep(0.2)
+
+    def set_detailed(on):
+        driver.execute_script(
+            "const v=document.querySelector('[data-view-detailed]');"
+            "if(v && v.checked!==arguments[0]){v.checked=arguments[0]; v.dispatchEvent(new Event('change'));}",
+            on,
+        )
+        time.sleep(0.2)
+
+    def cmp_box_visible():
+        # offsetParent is null when the element (or an ancestor) is display:none.
+        return driver.execute_script(
+            "const p=document.querySelector('.tab-panel.active .cmpctl');"
+            "const box=p && p.querySelector('.cmprow:not(.cmphd) .cmprow-cmp');"
+            "return box ? (box.offsetParent !== null) : null;"
+        )
+
+    def ref_box_visible():
+        return driver.execute_script(
+            "const p=document.querySelector('.tab-panel.active .cmpctl');"
+            "const r=p && p.querySelector('.cmprow:not(.cmphd) .cmprow-ref');"
+            "return r ? (r.offsetParent !== null) : null;"
+        )
+
+    set_detailed(False)
+    assert cmp_box_visible() is False, "CMP column should be hidden in Overview"
+    assert ref_box_visible() is True, "REF picker must still show in Overview"
+    set_detailed(True)
+    assert cmp_box_visible() is True, "CMP column should reappear in Details"
+
+
+def _click_tab(driver, panel_id):
+    driver.execute_script(
+        "document.querySelector(arguments[0]).click();",
+        f'.tab-button[data-tab-target="{panel_id}"]',
+    )
+    time.sleep(0.2)
+
+
+def _set_transpose(driver, on):
+    driver.execute_script(
+        "const t=document.querySelector('[data-transpose-toggle]');"
+        "if(t && t.checked!==arguments[0]){t.checked=arguments[0]; t.dispatchEvent(new Event('change'));}",
+        on,
+    )
+    time.sleep(0.2)
+
+
+def test_transpose_builds_mirror_and_colors(driver):
+    """Toggling Transpose builds a mirror in the active panel: models become rotated
+    columns (th.tcol-model), cases become rows (th.trow-case), and the cloned cells
+    are colored by the SAME compare engine (cmp-eq/cmp-leak/cmp-na) — not left blank.
+    This is the DIS-2280 integration with #98's reference/compare model."""
+    _click_tab(driver, "tab-toolcalling-batch")
+    _set_transpose(driver, True)
+    info = driver.execute_script(
         """
-        const sel = (document.body.className.match(/parser-(\\w+)/) || [])[1];
-        const tab = document.querySelector('.tab-panel.active') || document;
-        for (const cell of tab.querySelectorAll('td.cell')) {
-          const parity = cell.querySelector('.marker-parity-' + sel);
-          if (parity && parity.textContent.trim()
-              && parity.offsetParent !== null
-              && getComputedStyle(parity).display !== 'none') return true;
-        }
-        return false;
+        const p = document.querySelector('.tab-panel.active');
+        const tt = p.querySelector('table[data-transpose-table]');
+        if (!tt) return {built:false};
+        const cells = tt.querySelectorAll('td.cell');
+        let colored = 0;
+        cells.forEach(function (c) {
+          if (c.classList.contains('cmp-eq') || c.classList.contains('cmp-leak') || c.classList.contains('cmp-na')) colored++;
+        });
+        return {
+          built: true,
+          models: tt.querySelectorAll('th.tcol-model').length,
+          rows: tt.querySelectorAll('th.trow-case').length,
+          cells: cells.length,
+          colored: colored,
+        };
         """
     )
-    assert parity_shown, "no parity marker is visible in Conformance mode"
+    assert info["built"], "transposed mirror table was not built"
+    assert info["models"] > 1, "expected multiple rotated model columns"
+    assert info["rows"] > 1, "expected multiple case rows"
+    assert info["cells"] > 0 and info["colored"] == info["cells"], (
+        f"every cloned cell should be colored by applyCtl, got {info['colored']}/{info['cells']}"
+    )
+
+
+def test_transpose_does_not_double_overview_counts(driver):
+    """The mirror's cloned cells must not inflate the overview counts (both applyCtl
+    and updateOverviewStats skip cells inside [data-transpose-table])."""
+    _click_tab(driver, "tab-toolcalling-batch")
+    _set_transpose(driver, False)
+    counts = "const p=document.querySelector('.tab-panel.active');return Array.from(p.querySelectorAll('[data-overview-count]')).map(function(e){return e.textContent;});"
+    before = driver.execute_script(counts)
+    _set_transpose(driver, True)
+    after = driver.execute_script(counts)
+    assert before == after, f"overview counts changed when transposing: {before} -> {after}"
+
+
+def test_transpose_recolors_on_reference_change(driver):
+    """Picking a different Reference recolors the mirror too — applyCtl covers it
+    because the mirror lives in the same panel."""
+    _click_tab(driver, "tab-toolcalling-batch")
+    _set_transpose(driver, True)
+    snap = "const tt=document.querySelector('.tab-panel.active table[data-transpose-table]');return Array.from(tt.querySelectorAll('td.cell')).map(function(c){return c.className;});"
+    before = driver.execute_script(snap)
+    changed = driver.execute_script(
+        """
+        const ctl = document.querySelector('.tab-panel.active .cmpctl');
+        const refs = Array.from(ctl.querySelectorAll('input.cmp-ref'));
+        const other = refs.find(function (r) { return !r.checked && !r.disabled; });
+        if (!other) return false;
+        other.checked = true;
+        other.dispatchEvent(new Event('change', {bubbles: true}));
+        return true;
+        """
+    )
+    assert changed, "no alternate Reference available to select"
+    time.sleep(0.3)
+    after = driver.execute_script(snap)
+    assert before != after, "transposed cells did not recolor when the Reference changed"
+
+
+def test_transpose_honors_collapsed_case_group(driver):
+    """A case group collapsed via the column toggle in the original table stays hidden
+    (as rows) in the transposed mirror — the mirror carries data-col-hide-group and
+    re-applies the column state on build (regression: #87 review)."""
+    _click_tab(driver, "tab-toolcalling-batch")
+    _set_transpose(driver, False)
+    key = driver.execute_script(
+        """
+        const p = document.querySelector('.tab-panel.active');
+        const subKeys = new Set(Array.from(p.querySelectorAll('th.case-sub[data-col-hide-group]'))
+          .map(function (e) { return e.dataset.colHideGroup; }));
+        const btn = Array.from(p.querySelectorAll('[data-col-toggle]'))
+          .find(function (b) { return subKeys.has(b.dataset.colToggle); });
+        if (!btn) return null;
+        btn.click();  // collapse this case group
+        return btn.dataset.colToggle;
+        """
+    )
+    assert key, "no case-group column toggle found"
+    _set_transpose(driver, True)
+    hidden = driver.execute_script(
+        """
+        const key = arguments[0];
+        const tt = document.querySelector('.tab-panel.active table[data-transpose-table]');
+        const rows = tt.querySelectorAll('tr[data-col-hide-group="' + key + '"]');
+        if (!rows.length) return null;
+        return Array.from(rows).every(function (r) { return r.classList.contains('col-hidden'); });
+        """,
+        key,
+    )
+    assert hidden is True, f"transposed rows for collapsed group {key} should be hidden"
