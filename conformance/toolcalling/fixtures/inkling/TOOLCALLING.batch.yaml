@@ -8,8 +8,10 @@ spec: https://huggingface.co/thinkingmachines/Inkling-NVFP4
 captured_with:
   dynamo_rust: Dynamo inkling parser (this crate)
   sglang_python: sglang inkling FunctionCallParser (lmsysorg/sglang:inkling-cu13), captured 2026-07-16
+  vllm_python: vLLM InklingParser (vllm/parser/inkling.py, unified ParserEngine) via extract_tool_calls(); parser source vllm main @ c95c6630, captured 2026-07-16
 refs:
   local: &local_ref 'Inkling chat_template.jinja tool-call markup (<|content_invoke_tool_json|> ... <|end_message|>)'
+  e2e: &e2e_ref 'Real e2e capture: thinkingmachines/Inkling-NVFP4 served on dynamo.sglang + dynamo.frontend (raw, parsing-off; skip_special_tokens=False), model_text is the verbatim marker-ful decode of the generated output token-ids.'
 cases:
   TOOLCALLING.batch.1:
     description: Single tool call (happy path)
@@ -33,8 +35,7 @@ cases:
             location: Paris
             unit: celsius
         normal_text: ''
-      vllm: &vllm_unavailable
-        unavailable: vLLM is not installed in the sglang-inkling image; no Inkling tool parser to capture.
+      vllm: *d_1
       sglang: *d_1
   TOOLCALLING.batch.1.a:
     description: Minimal single call
@@ -49,7 +50,7 @@ cases:
           arguments:
             city: SF
         normal_text: ''
-      vllm: *vllm_unavailable
+      vllm: *d_1a
       sglang: *d_1a
   TOOLCALLING.batch.2:
     description: Headerless legacy call (no <|message_model|> header) still parses
@@ -64,7 +65,7 @@ cases:
           arguments:
             city: SF
         normal_text: ''
-      vllm: *vllm_unavailable
+      vllm: *d_2
       sglang: *d_2
   TOOLCALLING.batch.3:
     description: No tool call (plain text)
@@ -76,7 +77,10 @@ cases:
       dynamo: &d_3
         calls: []
         normal_text: Hello, how can I help you today?
-      vllm: *vllm_unavailable
+      vllm:
+        calls: []
+        normal_text: ''
+        reason: 'vLLM InklingParser hard-sets initial_state=MESSAGE_HEADER (non-streaming parse receives only the generated suffix after a prompt-prefilled <|message_model|>), so plain text before any content-kind marker is treated as message-header metadata and dropped. dynamo/sglang surface it as normal_text. Divergence only on marker-less input, which does not occur after a real Inkling prefill.'
       sglang: *d_3
   TOOLCALLING.batch.4:
     description: Two calls back-to-back with trailing terminator
@@ -94,7 +98,7 @@ cases:
           arguments:
             location: London
         normal_text: ''
-      vllm: *vllm_unavailable
+      vllm: *d_4
       sglang: *d_4
   TOOLCALLING.batch.5:
     description: Prefix prose before the tool-call block is kept as normal_text, header stripped
@@ -109,7 +113,13 @@ cases:
           arguments:
             location: NYC
         normal_text: 'Let me check that for you.'
-      vllm: *vllm_unavailable
+      vllm:
+        calls:
+        - name: get_weather
+          arguments:
+            location: NYC
+        normal_text: ''
+        reason: 'vLLM parses the tool call identically but drops the "Let me check that for you." prefix: initial_state=MESSAGE_HEADER treats text before the first content-kind marker as header metadata. dynamo trim_end()s and keeps it as normal_text; sglang keeps it with trailing space. All three agree on the call.'
       sglang:
         calls:
         - name: get_weather
@@ -127,11 +137,64 @@ cases:
       dynamo:
         calls: []
         normal_text: ''
-      vllm: *vllm_unavailable
+      vllm:
+        calls:
+        - name: weather
+          arguments_raw: '{"city":"S'
+          arguments_valid: false
+        normal_text: ''
+        reason: 'vLLM surfaces the truncated call with a name but unterminated/invalid args ("{\"city\":\"S", arguments_json_valid=false); it neither guesses nor drops. dynamo drops it entirely (calls=[], goal 3: never emit an ambiguous call); sglang leaks the raw markup into normal_text. All three diverge; dynamo behavior is preferred.'
       sglang:
         calls: []
         normal_text: '<|content_invoke_tool_json|>{"name":"weather","args":{"city":"S'
         reason: 'sglang leaks the truncated tool markup into normal_text; dynamo drops it (goal 3: never leak tool-call markup). Dynamo behavior is preferred here.'
+  TOOLCALLING.batch.7:
+    description: Typed-args tool call (integer + boolean) from a real e2e capture; header-less generation-primer block
+    ref: *e2e_ref
+    model_text: 'book_flight<|content_invoke_tool_json|>{"name":"book_flight","args":{"destination":"Paris","first_class":true,"passengers":2}}<|end_message|><|content_model_end_sampling|>'
+    tools:
+    - name: book_flight
+      parameters:
+        type: object
+        properties:
+          destination:
+            type: string
+          passengers:
+            type: integer
+          first_class:
+            type: boolean
+        required:
+        - destination
+        - passengers
+        - first_class
+    expected:
+      dynamo:
+        calls:
+        - name: book_flight
+          arguments:
+            destination: Paris
+            first_class: true
+            passengers: 2
+        normal_text: 'book_flight'
+        reason: 'Real Inkling-NVFP4 capture: the add_generation_prompt primer consumes the leading <|message_model|>, so the model emits the tool block header-less (NAME first). The isolated tool parser surfaces the bare NAME as normal_text; in production the reasoning stage runs first and reconstructs the <|message_model|> header (see REASONING.batch.7), after which the tool parser drops the NAME. Typed args (integer passengers, boolean first_class) are preserved verbatim via RawValue.'
+      vllm:
+        calls:
+        - name: book_flight
+          arguments:
+            destination: Paris
+            first_class: true
+            passengers: 2
+        normal_text: ''
+        reason: 'real-trace peer capture pending: vLLM InklingParser not re-stood-up for this live capture. Args/name expected identical; normal_text differs per initial_state=MESSAGE_HEADER (drops the bare NAME).'
+      sglang:
+        calls:
+        - name: book_flight
+          arguments:
+            destination: Paris
+            first_class: true
+            passengers: 2
+        normal_text: 'book_flight'
+        reason: 'Real capture: sglang InklingDetector (bundled in the live worker) run on this exact model_text also surfaces the bare NAME as normal_text (parity with dynamo); typed args identical.'
   TOOLCALLING.batch.9.a:
     description: Empty model text
     ref: *local_ref
@@ -142,7 +205,7 @@ cases:
       dynamo: &d_9a
         calls: []
         normal_text: ''
-      vllm: *vllm_unavailable
+      vllm: *d_9a
       sglang: *d_9a
   TOOLCALLING.batch.9.b:
     description: Blank / whitespace-only model text
@@ -154,7 +217,10 @@ cases:
       dynamo: &d_9b
         calls: []
         normal_text: '   '
-      vllm: *vllm_unavailable
+      vllm:
+        calls: []
+        normal_text: ''
+        reason: 'vLLM drops the whitespace-only input (no content-kind marker -> treated as message-header metadata under initial_state=MESSAGE_HEADER). dynamo/sglang preserve the whitespace as normal_text.'
       sglang: *d_9b
   TOOLCALLING.batch.10:
     description: Duplicate calls (same name twice)
@@ -172,7 +238,7 @@ cases:
           arguments:
             location: LA
         normal_text: ''
-      vllm: *vllm_unavailable
+      vllm: *d_10
       sglang: *d_10
   TOOLCALLING.batch.13:
     description: Unknown tool name absent from supplied tools is still surfaced
@@ -187,7 +253,7 @@ cases:
           arguments:
             location: NYC
         normal_text: ''
-      vllm: *vllm_unavailable
+      vllm: *d_13
       sglang: *d_13
   TOOLCALLING.batch.13.c:
     description: Mixed known and unknown calls
@@ -205,5 +271,5 @@ cases:
           arguments:
             location: LA
         normal_text: ''
-      vllm: *vllm_unavailable
+      vllm: *d_13c
       sglang: *d_13c

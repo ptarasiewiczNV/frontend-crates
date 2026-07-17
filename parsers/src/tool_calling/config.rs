@@ -409,7 +409,19 @@ impl ParserConfig {
                 vec![crate::tool_calling::gemma4::TOOL_CALL_START.to_string()]
             }
             ParserConfig::Inkling(_) => {
-                vec![crate::tool_calling::inkling::INVOKE.to_string()]
+                // Both the `<|message_model|>NAME` header and the bare
+                // `<|content_invoke_tool_json|>` (header-less) open a call. Include the
+                // header so the streaming jail's span starts at `<|message_model|>` and
+                // the parser strips the redundant NAME header instead of the jail
+                // leaking it as content. Mirrors `detect_tool_call_start_inkling`.
+                // Invariant: `<|message_model|>` also opens reasoning/content blocks;
+                // this is only safe because the inkling reasoning parser runs before the
+                // tool parser and consumes those, leaving only tool blocks header-framed
+                // for the jail.
+                vec![
+                    crate::tool_calling::inkling::MESSAGE_MODEL.to_string(),
+                    crate::tool_calling::inkling::INVOKE.to_string(),
+                ]
             }
         }
     }

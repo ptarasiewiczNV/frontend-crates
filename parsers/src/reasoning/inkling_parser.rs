@@ -45,6 +45,11 @@ const CONTENT_MARKERS: [&str; 5] = [
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum State {
+    /// Start of the assistant turn. Inkling's generation-primer `<|message_model|>`
+    /// (add_generation_prompt) is consumed by the prompt, so the model's first block
+    /// arrives header-less. Re-insert the primer only once the block is confirmed
+    /// structured, so marker-less plain text is never reframed as a tool block.
+    Primed,
     Idle,
     InReasoning,
     InContent,
@@ -62,7 +67,7 @@ impl InklingReasoningParser {
     pub fn new() -> Self {
         Self {
             buffer: String::new(),
-            state: State::Idle,
+            state: State::Primed,
         }
     }
 }
@@ -85,6 +90,15 @@ fn overlap(s: &str, delim: &str) -> usize {
 
 fn max_partial_marker_suffix(s: &str) -> usize {
     ALL_MARKERS.iter().map(|m| overlap(s, m)).max().unwrap_or(0)
+}
+
+/// True when `s` is a non-empty proper prefix of some marker: parser-owned partial
+/// markup that must be dropped on flush rather than surfaced as content.
+fn is_partial_leading_marker(s: &str) -> bool {
+    !s.is_empty()
+        && ALL_MARKERS
+            .iter()
+            .any(|m| m.len() > s.len() && m.starts_with(s))
 }
 
 fn find_earliest(s: &str, markers: &[&str]) -> Option<(usize, usize)> {
@@ -123,6 +137,34 @@ impl InklingReasoningParser {
     fn run(&mut self, reasoning: &mut String, normal: &mut String) {
         loop {
             match self.state {
+                State::Primed => {
+                    // First block of the turn (generation primer consumed by the
+                    // prompt). Only re-insert the primer once the block is confirmed
+                    // structured; otherwise hold, so marker-less plain text stays clean.
+                    if self.buffer.is_empty() {
+                        break;
+                    }
+                    if self.buffer.starts_with(MESSAGE_MODEL) {
+                        // The block already carries a real header; route via Idle.
+                        self.state = State::Idle;
+                    } else if CONTENT_MARKERS.iter().any(|m| self.buffer.starts_with(m))
+                        || self.buffer.contains(CONTENT_INVOKE)
+                    {
+                        // Header-less structured block: `<|content_thinking|>` /
+                        // `<|content_text|>` at the head, or `NAME<|content_invoke_tool_json|>`
+                        // (name first). Re-insert the consumed `<|message_model|>` so the
+                        // Idle router sends reasoning to reasoning, content to content, and
+                        // the tool block verbatim (with a header the tool parser can strip).
+                        self.buffer.insert_str(0, MESSAGE_MODEL);
+                        self.state = State::Idle;
+                    } else {
+                        // Still a prefix of a marker/header, or non-marker text (plain
+                        // content, or a tool NAME whose `<|content_invoke_tool_json|>` has
+                        // not arrived). Hold without emitting or injecting; finish() flushes
+                        // leftover plain text clean and drops partial markup.
+                        break;
+                    }
+                }
                 State::Idle => {
                     if let Some(pos) = self.buffer.find(MESSAGE_MODEL) {
                         normal.push_str(&strip_framing(&self.buffer[..pos]));
@@ -195,7 +237,7 @@ impl ReasoningParser for InklingReasoningParser {
     fn detect_and_parse_reasoning(&mut self, text: &str, _token_ids: &[u32]) -> ParserResult {
         // Batch: parse from a clean slate and reset, so a later stream is unaffected.
         self.buffer.clear();
-        self.state = State::Idle;
+        self.state = State::Primed;
 
         let mut reasoning = String::new();
         let mut normal = String::new();
@@ -206,7 +248,7 @@ impl ReasoningParser for InklingReasoningParser {
         normal.push_str(&flush.normal_text);
 
         self.buffer.clear();
-        self.state = State::Idle;
+        self.state = State::Primed;
 
         ParserResult {
             reasoning_text: reasoning.trim().to_string(),
@@ -235,6 +277,18 @@ impl ReasoningParser for InklingReasoningParser {
         }
         let buffered = std::mem::take(&mut self.buffer);
         let result = match self.state {
+            // First block never resolved: flush plain leftover text as content, but
+            // drop a lone partial marker (parser-owned markup).
+            State::Primed => {
+                if is_partial_leading_marker(&buffered) {
+                    ParserResult::default()
+                } else {
+                    ParserResult {
+                        normal_text: buffered,
+                        reasoning_text: String::new(),
+                    }
+                }
+            }
             // Block truncated before its `<|end_message|>`: flush what we have.
             State::InReasoning => ParserResult {
                 reasoning_text: buffered,
@@ -407,5 +461,110 @@ mod tests {
             normal,
             r#"<|message_model|>get_weather<|content_invoke_tool_json|>{"name":"get_weather","args":{"location":"Paris","unit":"celsius"}}<|end_message|>"#
         );
+    }
+
+    // ---- Header-less first block (real deployment: the generation-primer
+    // <|message_model|> is consumed by add_generation_prompt, so the model's
+    // first block arrives with no leading <|message_model|>). ----
+
+    #[test]
+    fn batch_headerless_reasoning_routes_to_reasoning() {
+        let mut parser = InklingReasoningParser::new();
+        let result =
+            parser.detect_and_parse_reasoning("<|content_thinking|>reason<|end_message|>", &[]);
+        assert_eq!(result.reasoning_text, "reason");
+        assert_eq!(result.normal_text, "");
+        assert_no_framing_leak(&result.normal_text);
+    }
+
+    #[test]
+    fn batch_headerless_content_routes_to_normal() {
+        let mut parser = InklingReasoningParser::new();
+        let result =
+            parser.detect_and_parse_reasoning("<|content_text|>answer<|end_message|>", &[]);
+        assert_eq!(result.reasoning_text, "");
+        assert_eq!(result.normal_text, "answer");
+    }
+
+    #[test]
+    fn batch_headerless_tool_block_reconstructs_header() {
+        let mut parser = InklingReasoningParser::new();
+        let result = parser.detect_and_parse_reasoning(
+            r#"get_weather<|content_invoke_tool_json|>{"name":"get_weather","args":{"location":"SF"}}<|end_message|>"#,
+            &[],
+        );
+        assert_eq!(result.reasoning_text, "");
+        // The consumed primer is re-inserted so the downstream tool parser strips
+        // the NAME header instead of leaking it into content.
+        assert_eq!(
+            result.normal_text,
+            r#"<|message_model|>get_weather<|content_invoke_tool_json|>{"name":"get_weather","args":{"location":"SF"}}<|end_message|>"#
+        );
+    }
+
+    #[test]
+    fn streaming_headerless_tool_block_reconstructs_header() {
+        let (reasoning, normal) = run_stream(&[
+            "get",
+            "_weather",
+            "<|content_invoke_tool_json|>",
+            r#"{"name":"get_weather","args":{"location":"SF"}}"#,
+            "<|end_message|>",
+        ]);
+        assert_eq!(reasoning, "");
+        assert_eq!(
+            normal,
+            r#"<|message_model|>get_weather<|content_invoke_tool_json|>{"name":"get_weather","args":{"location":"SF"}}<|end_message|>"#
+        );
+    }
+
+    #[test]
+    fn streaming_headerless_reasoning_then_content() {
+        // First block header-less (thinking); the second block carries a real
+        // <|message_model|> (the model emits it after the first <|end_message|>).
+        let (reasoning, normal) = run_stream(&[
+            "<|content_thinking|>rea",
+            "son<|end_message|><|message_model|><|content_text|>ans",
+            "wer<|end_message|>",
+        ]);
+        assert_eq!(reasoning, "reason");
+        assert_eq!(normal, "answer");
+    }
+
+    #[test]
+    fn streaming_headerless_plain_text_stays_clean() {
+        let (reasoning, normal) = run_stream(&["plain ", "answer"]);
+        assert_eq!(reasoning, "");
+        assert_eq!(normal, "plain answer");
+    }
+
+    #[test]
+    fn streaming_headerless_content_routes_to_normal() {
+        // Most common real shape: a header-less <|content_text|> first block
+        // (generation primer consumed), streamed across marker boundaries.
+        let (reasoning, normal) =
+            run_stream(&["<|content_te", "xt|>ans", "wer<|end_mess", "age|>"]);
+        assert_eq!(reasoning, "");
+        assert_eq!(normal, "answer");
+    }
+
+    #[test]
+    fn streaming_partial_marker_first_chunk_holds_then_reclassifies() {
+        // First chunk is only a marker prefix: Primed must hold (emit nothing)
+        // until it completes, then route the header-less reasoning block.
+        let (reasoning, normal) = run_stream(&["<|cont", "ent_thinking|>reason<|end_message|>"]);
+        assert_eq!(reasoning, "reason");
+        assert_eq!(normal, "");
+    }
+
+    #[test]
+    fn batch_empty_and_whitespace_stay_clean() {
+        let mut parser = InklingReasoningParser::new();
+        let empty = parser.detect_and_parse_reasoning("", &[]);
+        assert_eq!(empty.reasoning_text, "");
+        assert_eq!(empty.normal_text, "");
+        let ws = parser.detect_and_parse_reasoning("   ", &[]);
+        assert_eq!(ws.reasoning_text, "");
+        assert_eq!(ws.normal_text, "");
     }
 }
