@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Tool-calling parity: run every vendored `batch` fixture through
-//! `dynamo-parsers` and assert the result matches `expected.dynamo`.
+//! `dynamo-parsers` and assert the result matches `expected.dynamo_v1`.
 //!
 //! The fixture `family` field IS the parser name — passed straight to
 //! `detect_and_parse_tool_call_with_recovery`, exactly like dynamo's own
@@ -13,7 +13,6 @@
 //! cross-family placeholder cases (no model_text / no expected) are skipped.
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
 mod common;
 use common::{collect_yaml, fixture_name};
@@ -50,7 +49,7 @@ struct RawTool {
 }
 #[derive(Deserialize)]
 struct Expected {
-    dynamo: EngineExpected,
+    dynamo_v1: EngineExpected,
 }
 #[derive(Deserialize)]
 struct EngineExpected {
@@ -81,18 +80,32 @@ fn norm_text(s: Option<&str>) -> String {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn toolcalling_batch_parity() {
-    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/toolcalling/fixtures");
+    // Versioned corpus (inputs/ + <impl>-<version>/): shared model_text/tools live in
+    // inputs/, Dynamo v1's expected in the dynamo_v1-<version>/ dirs. Old version dirs
+    // are capture history (never deleted); fold them ASCENDING so the latest
+    // capture's expected wins per case.
+    let batch_root = common::ensure_fixtures().join("toolcalling/fixtures-batch-v1");
+    let inputs_root = batch_root.join("inputs");
+    let dyn_dirs = common::version_dirs_ascending(&batch_root, "dynamo_v1-");
+    assert!(
+        !dyn_dirs.is_empty(),
+        "no dynamo_v1-<version> dir under fixtures-batch-v1"
+    );
     let mut files = Vec::new();
-    collect_yaml(Path::new(root), &mut files);
+    collect_yaml(&inputs_root, &mut files);
     files.sort();
-    assert!(!files.is_empty(), "no fixtures found under {root}");
+    assert!(
+        !files.is_empty(),
+        "no fixtures found under {}",
+        inputs_root.display()
+    );
 
     let mut total = 0usize;
     let mut failures: Vec<String> = Vec::new();
 
     for path in &files {
         let yaml = std::fs::read_to_string(path).unwrap();
-        let fx: Fixture = match serde_yaml::from_str(&yaml) {
+        let mut fx: Fixture = match serde_yaml::from_str(&yaml) {
             Ok(f) => f,
             Err(e) => {
                 failures.push(format!("{}: YAML parse error: {e}", path.display()));
@@ -101,6 +114,36 @@ async fn toolcalling_batch_parity() {
         };
         if fx.mode != "batch" {
             continue;
+        }
+        // Fold Dynamo v1's `expected.dynamo_v1` (from each dynamo_v1-<version>/<family>/
+        // <name>, ascending) into the shared inputs cases — the latest version wins per case.
+        let rel = path.strip_prefix(&inputs_root).unwrap();
+        for dyn_dir in &dyn_dirs {
+            // Only a MISSING overlay is benign (this version simply didn't touch
+            // this family). A corrupt YAML or a real I/O error must fail loudly —
+            // swallowing it lets a stale older expectation win and pass falsely.
+            let dp = dyn_dir.join(rel);
+            let dyn_fx = match std::fs::read_to_string(&dp) {
+                Ok(t) => match serde_yaml::from_str::<Fixture>(&t) {
+                    Ok(f) => Some(f),
+                    Err(e) => {
+                        failures.push(format!("{}: dynamo overlay parse error: {e}", dp.display()));
+                        None
+                    }
+                },
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                Err(e) => {
+                    failures.push(format!("{}: dynamo overlay read error: {e}", dp.display()));
+                    None
+                }
+            };
+            if let Some(dfx) = dyn_fx {
+                for (cid, dcase) in dfx.cases {
+                    if let (Some(c), Some(exp)) = (fx.cases.get_mut(&cid), dcase.expected) {
+                        c.expected = Some(exp);
+                    }
+                }
+            }
         }
         eprintln!("fixture {}", fixture_name(path));
         for (cid, case) in &fx.cases {
@@ -141,7 +184,7 @@ async fn toolcalling_batch_parity() {
                 .map(|c| (c.function.name.clone(), decode_args(&c.function.arguments)))
                 .collect();
             let want: Vec<(String, Value)> = expected
-                .dynamo
+                .dynamo_v1
                 .calls
                 .iter()
                 .map(|c| (c.name.clone(), c.arguments.clone()))
@@ -149,14 +192,14 @@ async fn toolcalling_batch_parity() {
 
             let calls_ok = got == want;
             let normal_ok = norm_text(got_normal.as_deref())
-                == norm_text(expected.dynamo.normal_text.as_deref());
+                == norm_text(expected.dynamo_v1.normal_text.as_deref());
 
             if !calls_ok || !normal_ok {
                 failures.push(format!(
                     "{family} [{cid}]\n        got  calls={got:?}\n        got  normal={got_n:?}\n        want calls={want:?}\n        want normal={want_n:?}",
                     family = fx.family,
                     got_n = norm_text(got_normal.as_deref()),
-                    want_n = norm_text(expected.dynamo.normal_text.as_deref()),
+                    want_n = norm_text(expected.dynamo_v1.normal_text.as_deref()),
                 ));
             }
         }
@@ -172,7 +215,7 @@ async fn toolcalling_batch_parity() {
             eprintln!("FAIL {f}");
         }
         panic!(
-            "{} of {} batch cases diverged from expected.dynamo",
+            "{} of {} batch cases diverged from expected.dynamo_v1",
             failures.len(),
             total
         );

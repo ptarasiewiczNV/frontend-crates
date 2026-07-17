@@ -890,9 +890,13 @@ dependencies = [
 
 [[package]]
 name = "dynamo-parsers"
-version = "3.0.0"
+version = "5.0.1"
 dependencies = [
+ "aho-corasick",
  "anyhow",
+ "async-stream",
+ "dynamo-protocols",
+ "futures",
  "num-traits",
  "openai-harmony",
  "regex",
@@ -907,30 +911,30 @@ dependencies = [
 
 [[package]]
 name = "dynamo-parsers-v2"
-version = "0.1.11"
+version = "0.1.22"
 dependencies = [
  "anyhow",
- "dynamo-parsers",
+ "num-traits",
  "openai-harmony",
  "regex",
  "serde",
  "serde_json",
  "serde_yaml",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
 name = "dynamo-parsers-v2-py"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
- "dynamo-parsers",
  "dynamo-parsers-v2",
  "pyo3",
 ]
 
 [[package]]
 name = "dynamo-protocols"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "async-openai",
  "derive_builder",
@@ -947,7 +951,7 @@ dependencies = [
 
 [[package]]
 name = "dynamo-renderer"
-version = "1.3.5"
+version = "1.3.12"
 dependencies = [
  "anyhow",
  "chrono",
@@ -964,7 +968,7 @@ dependencies = [
 
 [[package]]
 name = "dynamo-tokenizers"
-version = "1.3.2"
+version = "1.5.3"
 dependencies = [
  "aho-corasick",
  "anyhow",

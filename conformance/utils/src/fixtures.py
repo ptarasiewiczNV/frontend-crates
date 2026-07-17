@@ -219,6 +219,12 @@ BATCH_SUB_CASE_GROUPS = [
             "5.e",
             "5.f",
             "5.g",
+            # streamv2.5.h (split orphan close) is streaming-only but shares the 5.*
+            # Malformed band. TODO: group by parent number (5) instead of listing every
+            # 5.<letter>, and dedup this list against tests/parity/toolcalling/table.py
+            # (two copies of BATCH_SUB_CASE_GROUPS drift — a new sub-case must be added
+            # to BOTH today).
+            "5.h",
         ),
     ),
     (
@@ -544,7 +550,7 @@ def _derive_stream_expected(case: dict) -> dict:
         # divergence), never `S_rs?`/`V_ps?` (research-needed). The per-chunk `expected`
         # in the fixture is the detailed evidence.
         if impl in PEER_IMPL_KEYS:
-            block["reason"] = (
+            block["explanation"] = (
                 f"Captured from the {IMPL_DISPLAY[impl]} streaming parser. Streaming output differs "
                 "from Dynamo parser v2 token-incremental behavior by design (text vs token "
                 "streaming); see per-chunk `expected` in the fixture."
