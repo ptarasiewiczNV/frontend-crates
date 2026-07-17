@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 family: inkling
-model_label: Inkling NVFP4
+model_label: Inkling
 mode: batch
 spec: https://huggingface.co/thinkingmachines/Inkling-NVFP4
 captured_with:
@@ -11,7 +11,7 @@ captured_with:
   vllm_python: vLLM InklingParser (vllm/parser/inkling.py, unified ParserEngine) via extract_reasoning(); parser source vllm main @ c95c6630, captured 2026-07-16
 refs:
   local: &local_ref 'Inkling block-structured reasoning grammar (<|content_thinking|> / <|content_text|> segments)'
-  e2e: &e2e_ref 'Real e2e capture: thinkingmachines/Inkling-NVFP4 served on dynamo.sglang + dynamo.frontend (raw, parsing-off; skip_special_tokens=False), model_text is the verbatim marker-ful decode of the generated output token-ids (reasoning_effort=high).'
+  e2e: &e2e_ref 'Real e2e capture: Inkling served on dynamo.sglang + dynamo.frontend (raw, parsing-off; skip_special_tokens=False), model_text is the verbatim marker-ful decode of the generated output token-ids (reasoning_effort=high).'
 cases:
   REASONING.batch.1.a:
     description: Empty input

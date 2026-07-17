@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 family: inkling
-model_label: Inkling NVFP4
+model_label: Inkling
 mode: batch
 spec: https://huggingface.co/thinkingmachines/Inkling-NVFP4
 captured_with:
@@ -11,7 +11,7 @@ captured_with:
   vllm_python: vLLM InklingParser (vllm/parser/inkling.py, unified ParserEngine) via extract_tool_calls(); parser source vllm main @ c95c6630, captured 2026-07-16
 refs:
   local: &local_ref 'Inkling chat_template.jinja tool-call markup (<|content_invoke_tool_json|> ... <|end_message|>)'
-  e2e: &e2e_ref 'Real e2e capture: thinkingmachines/Inkling-NVFP4 served on dynamo.sglang + dynamo.frontend (raw, parsing-off; skip_special_tokens=False), model_text is the verbatim marker-ful decode of the generated output token-ids.'
+  e2e: &e2e_ref 'Real e2e capture: Inkling served on dynamo.sglang + dynamo.frontend (raw, parsing-off; skip_special_tokens=False), model_text is the verbatim marker-ful decode of the generated output token-ids.'
 cases:
   TOOLCALLING.batch.1:
     description: Single tool call (happy path)
@@ -175,8 +175,8 @@ cases:
             destination: Paris
             first_class: true
             passengers: 2
-        normal_text: 'book_flight'
-        reason: 'Real Inkling-NVFP4 capture: the add_generation_prompt primer consumes the leading <|message_model|>, so the model emits the tool block header-less (NAME first). The isolated tool parser surfaces the bare NAME as normal_text; in production the reasoning stage runs first and reconstructs the <|message_model|> header (see REASONING.batch.7), after which the tool parser drops the NAME. Typed args (integer passengers, boolean first_class) are preserved verbatim via RawValue.'
+        normal_text: ''
+        reason: 'Real Inkling capture. add_generation_prompt consumes the leading <|message_model|>, so the model emits the tool block header-less (NAME first): book_flight<|content_invoke_tool_json|>... A header-less prefix that exactly equals the parsed call name is the redundant call header, not content, so the parser drops it (normal_text=""). Real prose prefixes never equal the tool name, so they are still preserved as normal_text (see batch.5). This keeps the tool name out of the content channel even when the tool parser runs standalone; in the two-stage pipeline the reasoning parser also reconstructs the header upstream (see REASONING.batch.7). Typed args (integer passengers, boolean first_class) preserved verbatim via RawValue.'
       vllm:
         calls:
         - name: book_flight
@@ -185,7 +185,7 @@ cases:
             first_class: true
             passengers: 2
         normal_text: ''
-        reason: 'real-trace peer capture pending: vLLM InklingParser not re-stood-up for this live capture. Args/name expected identical; normal_text differs per initial_state=MESSAGE_HEADER (drops the bare NAME).'
+        reason: 'real-trace peer capture pending: vLLM InklingParser not re-stood-up for this live capture. vLLM drops the bare NAME via initial_state=MESSAGE_HEADER; dynamo now agrees (header-less redundant-name drop). Args/name expected identical.'
       sglang:
         calls:
         - name: book_flight
@@ -194,7 +194,7 @@ cases:
             first_class: true
             passengers: 2
         normal_text: 'book_flight'
-        reason: 'Real capture: sglang InklingDetector (bundled in the live worker) run on this exact model_text also surfaces the bare NAME as normal_text (parity with dynamo); typed args identical.'
+        reason: 'Real capture: the sglang InklingDetector (bundled in the live worker) run on this exact model_text surfaces the bare NAME as normal_text. dynamo and vLLM drop the header-less redundant NAME; sglang keeps it. Typed args identical.'
   TOOLCALLING.batch.9.a:
     description: Empty model text
     ref: *local_ref

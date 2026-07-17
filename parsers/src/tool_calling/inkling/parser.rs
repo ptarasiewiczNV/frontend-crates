@@ -68,10 +68,9 @@ pub fn try_tool_call_parse_inkling(
 
     // Start the stripped span at the `<|message_model|>NAME` header when present, so
     // it never leaks into normal_text.
-    let block_start = message[..invoke_pos]
-        .rfind(MESSAGE_MODEL)
-        .unwrap_or(invoke_pos);
-    let prefix = message[..block_start].trim_end().to_string();
+    let header_pos = message[..invoke_pos].rfind(MESSAGE_MODEL);
+    let block_start = header_pos.unwrap_or(invoke_pos);
+    let mut prefix = message[..block_start].trim_end().to_string();
 
     let mut calls = Vec::new();
     let mut cursor = block_start;
@@ -99,6 +98,22 @@ pub fn try_tool_call_parse_inkling(
             Some(next) => cursor = next,
             None => break,
         }
+    }
+
+    // Header-less generation-primer block: when `add_generation_prompt` puts the
+    // `<|message_model|>` primer in the prompt, the model emits its first block as
+    // `NAME<|content_invoke_tool_json|>...` with no header. That leading NAME is the
+    // redundant call header, not content, so drop it when it exactly matches the parsed
+    // call name. Guarded on both no-header and exact-name-match: real prose (e.g.
+    // "Let me check.") never equals the tool name, so it is still preserved as
+    // normal_text. Matches vLLM's standalone output; in the two-stage pipeline the
+    // reasoning parser reconstructs the header upstream, so this only affects the
+    // tool parser run on its own.
+    if header_pos.is_none()
+        && let Some(first) = calls.first()
+        && prefix == first.function.name
+    {
+        prefix.clear();
     }
 
     Ok((calls, Some(prefix)))
@@ -243,5 +258,29 @@ mod tests {
             try_tool_call_parse_inkling(input, &InklingParserConfig::default(), None).unwrap();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].function.arguments, r#"{"z":1,"a":2.0}"#);
+    }
+
+    #[test]
+    fn headerless_generation_primer_name_is_dropped() {
+        // Real e2e shape: `add_generation_prompt` consumes the `<|message_model|>`
+        // primer, so the block is `NAME<|content_invoke_tool_json|>...`. The bare NAME
+        // is the redundant header and must not leak into normal_text.
+        let input = r#"book_flight<|content_invoke_tool_json|>{"name":"book_flight","args":{"destination":"Paris"}}<|end_message|>"#;
+        let (calls, normal) =
+            try_tool_call_parse_inkling(input, &InklingParserConfig::default(), None).unwrap();
+        assert_eq!(normal.as_deref(), Some(""));
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].function.name, "book_flight");
+    }
+
+    #[test]
+    fn headerless_prefix_prose_is_kept_when_not_the_name() {
+        // A header-less prefix that is NOT the tool name is real prose, kept verbatim
+        // (only an exact name match is treated as the redundant header).
+        let input = r#"here you go book_flight<|content_invoke_tool_json|>{"name":"book_flight","args":{}}<|end_message|>"#;
+        let (calls, normal) =
+            try_tool_call_parse_inkling(input, &InklingParserConfig::default(), None).unwrap();
+        assert_eq!(normal.as_deref(), Some("here you go book_flight"));
+        assert_eq!(calls.len(), 1);
     }
 }

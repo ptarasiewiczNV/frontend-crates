@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 family: inkling
-model_label: Inkling NVFP4
+model_label: Inkling
 mode: stream
 spec: https://huggingface.co/thinkingmachines/Inkling-NVFP4
 refs:
